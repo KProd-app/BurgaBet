@@ -106,7 +106,8 @@ export function getCategoryButtonActiveClasses(color: string): string {
 
 export default function Dashboard() {
   const [isDemoMode, setIsDemoMode] = useState<boolean>(true);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [userLoading, setUserLoading] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<'markets' | 'portfolio' | 'admin'>('markets');
   
   // Duomenys
@@ -187,73 +188,100 @@ export default function Dashboard() {
 
   useEffect(() => {
     const hasKeys = !!(
-      process.env.NEXT_PUBLIC_SUPABASE_URL && 
+      process.env.NEXT_PUBLIC_SUPABASE_URL &&
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
     );
     setIsDemoMode(!hasKeys);
 
     let isMounted = true;
 
-    const init = async () => {
-      console.log("init() paleistas, hasKeys =", hasKeys);
-      if (!hasKeys) {
-        await loadInitialData(true);
-      } else {
-        console.log("Supabase režimas aktyvus. Laukiame onAuthStateChange sesijos užkrovimui...");
-      }
-    };
+    if (!hasKeys) {
+      loadInitialData(true).then(() => {
+        if (isMounted) setUserLoading(false);
+      });
+      return;
+    }
 
-    init();
+    // 1. IŠKART krauname viešus duomenis (rinkas, kategorijas, lyderių lentelę)
+    // Tai pažadina duomenų bazę ir vartotojas iškart mato turinį be laukimo
+    console.log("Greitas viešų duomenų pakrovimas fone...");
+    loadMarketsAndLeaderboard(false, null).then(() => {
+      console.log("Vieši duomenys užkrauti!");
+    });
 
     let authSubscription: any = null;
     let channel: any = null;
 
-    if (hasKeys) {
-      // 1. Sekame naudotojo prisijungimus ir keičiame būseną atitinkamai pagal sesijos buvimą
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (!isMounted) return;
-        
-        console.log(`Supabase Auth įvykis: ${event}, Sesija egzistuoja: ${!!session}`, session ? `Vartotojas: ${session.user.email}` : 'Nėra sesijos');
+    // 2. Lygiagrečiai tikriname sesiją
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted) return;
 
-        if (session) {
-          if (currentUserRef.current?.id !== session.user.id && !isInitialLoadInProgressRef.current) {
-            isInitialLoadInProgressRef.current = true;
-            console.log("Aptiktas naujas prisijungimas arba sesijos atstatymas. Kraunami vartotojo duomenys...");
-            try {
-              await loadInitialData(false, session);
-            } finally {
-              isInitialLoadInProgressRef.current = false;
+      console.log(`Supabase Auth įvykis: ${event}, Sesija: ${session?.user?.email ?? 'nėra'}`);
+
+      if (session) {
+        if (currentUserRef.current?.id !== session.user.id && !isInitialLoadInProgressRef.current) {
+          isInitialLoadInProgressRef.current = true;
+          console.log("Aptiktas prisijungimas. Kraunami vartotojo duomenys...");
+          try {
+            // Greitas profilių + user duomenų pakrovimas lygiagrečiai
+            const [profileRes, positionsRes, transactionsRes] = await Promise.all([
+              supabase.from('profiles').select('*').eq('id', session.user.id).single(),
+              supabase.from('positions').select('*').eq('user_id', session.user.id),
+              supabase.from('transactions').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false })
+            ]);
+
+            if (!isMounted) return;
+
+            if (profileRes.data) {
+              setCurrentUser(profileRes.data);
+            } else {
+              // Profilio nėra – sukuriame naują
+              const tempProfile = {
+                id: session.user.id,
+                email: session.user.email || '',
+                full_name: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Vartotojas',
+                avatar_url: session.user.user_metadata?.avatar_url || null,
+                token_balance: 1000.0,
+                is_admin: session.user.email === 'admin@burgabet.wtf'
+              };
+              const { data: newProfile } = await supabase.from('profiles').insert([tempProfile]).select().single();
+              if (isMounted) setCurrentUser(newProfile ?? tempProfile);
             }
-          } else {
-            console.log("onAuthStateChange: loadInitialData praleidžiamas, nes vartotojas nesikeičia arba krovimas jau vyksta.");
+
+            if (positionsRes.data) setPositions(positionsRes.data);
+            if (transactionsRes.data) setTransactions(transactionsRes.data);
+
+            // Atnaujiname lyderių lentelę su naujais balansais
+            const { data: leaderboard } = await supabase.from('profiles').select('*').order('token_balance', { ascending: false });
+            if (isMounted && leaderboard) setLeaderboard(leaderboard);
+          } catch (err) {
+            console.error("Klaida kraunant vartotojo duomenis:", err);
+          } finally {
+            isInitialLoadInProgressRef.current = false;
+            if (isMounted) setUserLoading(false);
           }
         } else {
-          console.log("onAuthStateChange: Vartotojas neprisijungęs.");
-          // Visada išvalome vartotojo duomenis ir užkrauname tik viešąją informaciją (rinkas ir lyderių lentelę)
-          setCurrentUser(null);
-          setPositions([]);
-          setTransactions([]);
-          setLoading(true);
-          await loadMarketsAndLeaderboard(false, null);
-          if (isMounted) setLoading(false);
+          if (isMounted) setUserLoading(false);
         }
-      });
-      authSubscription = subscription;
+      } else {
+        // Vartotojas neprisijungęs
+        setCurrentUser(null);
+        setPositions([]);
+        setTransactions([]);
+        if (isMounted) setUserLoading(false);
+      }
+    });
+    authSubscription = subscription;
 
-      // 2. Realtime prenumerata visoms lentelėms (tylusis fono atnaujinimas)
-      channel = supabase
-        .channel('db-realtime-changes')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public' },
-          () => {
-            if (isMounted) {
-              loadMarketsAndLeaderboard(false, currentUserRef.current?.id || null);
-            }
-          }
-        )
-        .subscribe();
-    }
+    // 3. Realtime prenumerata
+    channel = supabase
+      .channel('db-realtime-changes')
+      .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+        if (isMounted) {
+          loadMarketsAndLeaderboard(false, currentUserRef.current?.id || null);
+        }
+      })
+      .subscribe();
 
     return () => {
       isMounted = false;
@@ -1249,21 +1277,7 @@ export default function Dashboard() {
     return true;
   });
 
-  if (loading) {
-    return (
-      <div className="flex-1 w-full min-h-[85vh] flex flex-col items-center justify-center text-zinc-100 font-sans">
-        <div className="flex flex-col items-center gap-4 bg-zinc-900/60 border border-zinc-800 p-8 rounded-3xl backdrop-blur-md shadow-2xl">
-          <div className="bg-gradient-to-tr from-emerald-600 to-cyan-500 p-4 rounded-2xl shadow-lg shadow-emerald-500/20">
-            <Loader2 className="w-12 h-12 text-white animate-spin" />
-          </div>
-          <h2 className="text-xl font-bold tracking-tight bg-gradient-to-r from-white via-zinc-200 to-zinc-400 bg-clip-text text-transparent mt-2">
-            Kraunama BurgaBet...
-          </h2>
-          <p className="text-xs text-zinc-500">Tikrinama vartotojo sesija ir kraunami duomenys</p>
-        </div>
-      </div>
-    );
-  }
+
 
   return (
     <div className="flex-1 w-full max-w-7xl mx-auto px-4 py-8 text-zinc-100 font-sans">
@@ -1282,7 +1296,15 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {currentUser ? (
+        {userLoading ? (
+          <div className="flex items-center gap-3 bg-zinc-900/60 border border-zinc-800 p-4 rounded-2xl animate-pulse">
+            <div className="w-10 h-10 rounded-full bg-zinc-800" />
+            <div className="space-y-2">
+              <div className="h-3 w-24 bg-zinc-800 rounded" />
+              <div className="h-3 w-16 bg-zinc-800 rounded" />
+            </div>
+          </div>
+        ) : currentUser ? (
           <div className="flex items-center gap-4 bg-zinc-900/60 border border-zinc-800 p-4 rounded-2xl backdrop-blur-md">
             <div className="flex items-center justify-center w-10 h-10 rounded-full bg-zinc-800 border border-zinc-700 text-emerald-400 font-bold uppercase">
               {currentUser.full_name?.charAt(0) || 'U'}
