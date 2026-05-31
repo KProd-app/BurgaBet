@@ -1238,6 +1238,22 @@ export default function Dashboard() {
     return true;
   });
 
+  if (loading) {
+    return (
+      <div className="flex-1 w-full min-h-[85vh] flex flex-col items-center justify-center text-zinc-100 font-sans">
+        <div className="flex flex-col items-center gap-4 bg-zinc-900/60 border border-zinc-800 p-8 rounded-3xl backdrop-blur-md shadow-2xl">
+          <div className="bg-gradient-to-tr from-emerald-600 to-cyan-500 p-4 rounded-2xl shadow-lg shadow-emerald-500/20">
+            <Loader2 className="w-12 h-12 text-white animate-spin" />
+          </div>
+          <h2 className="text-xl font-bold tracking-tight bg-gradient-to-r from-white via-zinc-200 to-zinc-400 bg-clip-text text-transparent mt-2">
+            Kraunama BurgaBet...
+          </h2>
+          <p className="text-xs text-zinc-500">Tikrinama vartotojo sesija ir kraunami duomenys</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 w-full max-w-7xl mx-auto px-4 py-8 text-zinc-100 font-sans">
       
