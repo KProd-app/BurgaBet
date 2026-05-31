@@ -483,20 +483,6 @@ create trigger on_auth_user_created
 -- SEED DUOMENYS (Lietuviškos spėjimų rinkos)
 -- =========================================================================
 
--- PASTABA: Kadangi profiles naudoja auth.users išorinius raktus, seed procesui 
--- sukuriame kelis dummy vartotojus profilių lentelėje (testavimo tikslais).
--- Realiems vartotojams jie bus sukurti automatiškai registracijos metu.
-
--- Sukuriame sistemos/admino profilį
-insert into public.profiles (id, email, full_name, token_balance, is_admin)
-values 
-    ('00000000-0000-0000-0000-000000000001', 'admin@burgabet.lt', 'BurgaBet Administratorius', 999999.0, true),
-    ('00000000-0000-0000-0000-000000000002', 'andrius@burgabet.lt', 'Andrius gamyba', 1000.0, false),
-    ('00000000-0000-0000-0000-000000000003', 'ainius@burgabet.lt', 'Ainius Integracija', 1000.0, false),
-    ('00000000-0000-0000-0000-000000000004', 'einoras@burgabet.lt', 'Einoras Integracija', 1000.0, false),
-    ('00000000-0000-0000-0000-000000000005', 'tomas@burgabet.lt', 'Tomas Fotografija', 1000.0, false)
-on conflict (id) do nothing;
-
 -- Įterpiame lietuviškas rinkas
 insert into public.markets (id, question, description, yes_reserves, no_reserves, status, creator_id)
 values
@@ -506,7 +492,7 @@ values
         'Rinka bus vertinama pagal gamybos skyriaus kassavaitinę ataskaitą, teikiamą penktadienį iki 17:00.',
         120.0, 80.0, -- YES kaina bus apie 40, NO kaina apie 60 žetonų (Yes/No santykis 80/120)
         'active',
-        '00000000-0000-0000-0000-000000000001'
+        null
     ),
     (
         '10000000-0000-0000-0000-000000000002',
@@ -514,7 +500,7 @@ values
         'Užduotis laikoma įvykdyta, jei iki penktadienio 23:59 PR (Pull Request) bus patvirtintas ir sujungtas į master šaką.',
         100.0, 100.0, -- YES ir NO po 50 žetonų (50/50 šansas)
         'active',
-        '00000000-0000-0000-0000-000000000001'
+        null
     ),
     (
         '10000000-0000-0000-0000-000000000003',
@@ -522,6 +508,6 @@ values
         'Rinka bus išspręsta teigiamai, jei projekto galerijoje atsiras bent 5 naujos nuotraukos.',
         90.0, 110.0, -- YES kaina apie 55 žetonai, NO apie 45 žetonai
         'active',
-        '00000000-0000-0000-0000-000000000001'
+        null
     )
 on conflict (id) do nothing;
