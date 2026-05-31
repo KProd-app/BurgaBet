@@ -111,6 +111,7 @@ export default function Dashboard() {
   
   // Duomenys
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
+  console.log("RENDER: Dashboard. currentUser =", currentUser ? currentUser.email : "null", "isDemoMode =", isDemoMode, "loading =", loading);
   const [markets, setMarkets] = useState<Market[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
