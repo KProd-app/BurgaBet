@@ -1,5 +1,17 @@
 -- BurgaBet Duomenų Bazės Schema
 
+-- Išvalome senus objektus, jei jie egzistuoja (leidžia skriptą paleisti pakartotinai)
+drop table if exists public.transactions cascade;
+drop table if exists public.positions cascade;
+drop table if exists public.markets cascade;
+drop table if exists public.profiles cascade;
+drop trigger if exists on_auth_user_created on auth.users cascade;
+drop function if exists public.handle_new_user() cascade;
+drop function if exists public.place_bet(uuid, text, numeric) cascade;
+drop function if exists public.sell_shares(uuid, text, numeric) cascade;
+drop function if exists public.resolve_market(uuid, text) cascade;
+drop function if exists public.check_profile_updates() cascade;
+
 -- Aktyvuojame UUID plėtinį, jei jis dar neįjungtas
 create extension if not exists "uuid-ossp";
 
