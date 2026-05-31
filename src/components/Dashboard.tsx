@@ -462,17 +462,25 @@ export default function Dashboard() {
           await loadMarketsAndLeaderboard(false, null);
         }
       }
-    } catch (err) {
-      console.error("Supabase užklausos klaida, perjungiamas saugus vietinis režimas:", err);
-      // Nenaudojame rekursijos, tiesiog nuskaitome vietinius duomenis
-      setIsDemoMode(true);
-      try {
-        const localCats = JSON.parse(localStorage.getItem('bb_categories') || '[]');
-        const localMarkets = JSON.parse(localStorage.getItem('bb_markets') || '[]');
-        setCategories(localCats);
-        setMarkets(localMarkets);
-      } catch (e) {
-        console.error("Klaida nuskaitant atsargines kategorijas iš LocalStorage:", e);
+    } catch (err: any) {
+      console.error("Užkrovimo klaida:", err);
+      const hasKeys = !!(
+        process.env.NEXT_PUBLIC_SUPABASE_URL && 
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      );
+      if (!hasKeys) {
+        setIsDemoMode(true);
+        try {
+          const localCats = JSON.parse(localStorage.getItem('bb_categories') || '[]');
+          const localMarkets = JSON.parse(localStorage.getItem('bb_markets') || '[]');
+          setCategories(localCats);
+          setMarkets(localMarkets);
+        } catch (e) {
+          console.error("Klaida nuskaitant atsargines kategorijas iš LocalStorage:", e);
+        }
+      } else {
+        // Jeigu turime raktus, pasiliekame Supabase režime, bet pranešame apie klaidą vartotojui
+        showToast('error', 'Nepavyko užkrauti duomenų iš Supabase: ' + (err.message || 'Tinklo klaida'));
       }
     } finally {
       setLoading(false);
