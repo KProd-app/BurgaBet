@@ -70,7 +70,7 @@ alter table public.transactions enable row level security;
 
 -- Profiliai: visi prisijungę mato kitų profilius (Leaderboard'ui), bet keisti gali tik savo
 create policy "Visi vartotojai gali matyti profilius" on public.profiles
-    for select using (auth.role() = 'authenticated');
+    for select using (true); -- Leisti matyti visiems, net svečiams
 
 create policy "Vartotojas gali atnaujinti tik savo profilio info" on public.profiles
     for update using (auth.uid() = id);
@@ -97,7 +97,7 @@ create trigger tr_check_profile_updates
 
 -- Rinkos: visi prisijungę mato rinkas, tik adminai gali jas kurti/modifikuoti
 create policy "Visi prisijungę gali matyti rinkas" on public.markets
-    for select using (auth.role() = 'authenticated');
+    for select using (true); -- Leisti matyti visiems, net svečiams
 
 create policy "Tik adminai gali valdyti rinkas" on public.markets
     for all using (
@@ -109,7 +109,7 @@ create policy "Tik adminai gali valdyti rinkas" on public.markets
 
 -- Pozicijos: vartotojai mato savo pozicijas (arba visų dėl skaidrumo), bet tiesiogiai rašyti negali
 create policy "Visi prisijungę gali matyti pozicijas" on public.positions
-    for select using (auth.role() = 'authenticated');
+    for select using (true); -- Leisti matyti visiems, net svečiams
 
 -- Transakcijos: vartotojai mato savo transakcijas, tiesiogiai rašyti negali
 create policy "Vartotojai gali matyti savo transakcijas" on public.transactions

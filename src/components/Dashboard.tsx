@@ -17,10 +17,12 @@ import {
   Sparkles, 
   ShieldAlert,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  LogOut,
+  UserPlus,
+  LogIn
 } from 'lucide-react';
 
-// DB schemas atitikmenys TypeScript
 interface Profile {
   id: string;
   email: string;
@@ -64,17 +66,23 @@ interface Transaction {
 }
 
 export default function Dashboard() {
-  // Režimo būsena (ar sukonfigūruotas Supabase)
   const [isDemoMode, setIsDemoMode] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<'markets' | 'portfolio' | 'admin'>('markets');
   
-  // Duomenų bazės būsenos
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [markets, setMarkets] = useState<Market[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
   const [leaderboard, setLeaderboard] = useState<Profile[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+
+  // Autentifikacijos būsenos
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [authEmail, setAuthEmail] = useState<string>('');
+  const [authPassword, setAuthPassword] = useState<string>('');
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [authLoading, setAuthLoading] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Greitojo pirkimo būsenos
   const [selectedMarket, setSelectedMarket] = useState<Market | null>(null);
@@ -92,22 +100,79 @@ export default function Dashboard() {
   const [newLiquidity, setNewLiquidity] = useState<string>('100');
   const [adminMessage, setAdminMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
-  // Tikriname Supabase aplinkos kintamuosius
   useEffect(() => {
     const hasKeys = !!(
       process.env.NEXT_PUBLIC_SUPABASE_URL && 
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
     );
     setIsDemoMode(!hasKeys);
-    
     loadInitialData(!hasKeys);
+
+    if (hasKeys) {
+      // Automatiškai stebime vartotojo prisijungimo būseną
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          await loadInitialData(false);
+        } else if (event === 'SIGNED_OUT') {
+          setCurrentUser(null);
+          setPositions([]);
+          setTransactions([]);
+          // Perkrauname lyderių lentelę ir rinkas be vartotojo konteksto
+          await loadMarketsAndLeaderboard(false, null);
+        }
+      });
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    }
   }, []);
 
-  // Pradinių duomenų krovimas (Supabase arba LocalStorage)
+  const loadMarketsAndLeaderboard = async (demo: boolean, userId: string | null) => {
+    if (demo) return;
+    try {
+      // Nuskaitome rinkas
+      const { data: dbMarkets } = await supabase
+        .from('markets')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (dbMarkets) setMarkets(dbMarkets);
+
+      // Lyderių lentelė (dabar RLS leidžia select visiems)
+      const { data: dbLeaderboard } = await supabase
+        .from('profiles')
+        .select('*')
+        .order('token_balance', { ascending: false });
+      if (dbLeaderboard) setLeaderboard(dbLeaderboard);
+
+      if (userId) {
+        // Nuskaitome pozicijas
+        const { data: dbPositions } = await supabase
+          .from('positions')
+          .select('*')
+          .eq('user_id', userId);
+        if (dbPositions) setPositions(dbPositions);
+
+        // Transakcijos
+        const { data: dbTrans } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false });
+        if (dbTrans) setTransactions(dbTrans);
+      }
+    } catch (e) {
+      printError("Klaida nuskaitant Supabase viešus duomenis", e);
+    }
+  };
+
+  const printError = (msg: string, e: any) => {
+    console.error(msg, e);
+  };
+
   const loadInitialData = async (demo: boolean) => {
     setLoading(true);
     if (demo) {
-      // 1. Įkrauname duomenis iš LocalStorage arba sugeneruojame pradinius duomenis
       let localProfiles: Profile[] = [];
       let localMarkets: Market[] = [];
       let localPositions: Position[] = [];
@@ -119,10 +184,9 @@ export default function Dashboard() {
         localPositions = JSON.parse(localStorage.getItem('bb_positions') || '[]');
         localTransactions = JSON.parse(localStorage.getItem('bb_transactions') || '[]');
       } catch (e) {
-        console.error("Klaida nuskaitant LocalStorage, perrašomi duomenys", e);
+        console.error("Klaida nuskaitant LocalStorage", e);
       }
 
-      // Sukuriame pradinius vartotojus, jei jų nėra
       if (localProfiles.length === 0) {
         localProfiles = [
           { id: 'u1', email: 'andrius@burgabet.lt', full_name: 'Andrius Gamyba', avatar_url: null, token_balance: 1000, is_admin: false },
@@ -134,11 +198,9 @@ export default function Dashboard() {
         localStorage.setItem('bb_profiles', JSON.stringify(localProfiles));
       }
 
-      // Sukuriame pradinį prisijungusį vartotoją (Andrius)
       let me = localProfiles.find(p => p.id === 'u1') || localProfiles[0];
       setCurrentUser(me);
 
-      // Sukuriame pradines rinkas, jei jų nėra
       if (localMarkets.length === 0) {
         localMarkets = [
           {
@@ -181,82 +243,35 @@ export default function Dashboard() {
         localStorage.setItem('bb_markets', JSON.stringify(localMarkets));
       }
 
-      // Išsaugome būseną
       setMarkets(localMarkets);
       setPositions(localPositions.filter(p => p.user_id === me.id));
       setLeaderboard([...localProfiles].sort((a, b) => b.token_balance - a.token_balance));
       setTransactions(localTransactions.filter(t => t.user_id === me.id));
 
     } else {
-      // 2. Realus Supabase krovimas
       try {
-        // Tikriname sesiją
         const { data: { session } } = await supabase.auth.getSession();
         
-        let userId = session?.user?.id;
-        
-        // Jei nesame prisijungę realiai, sukurkime laikiną vartotoją Supabase lentelėje
-        if (!userId) {
-          // Naudojame dummy vartotoją iš seed duomenų
-          userId = '00000000-0000-0000-0000-000000000002'; // Andrius
-        }
+        if (session) {
+          const userId = session.user.id;
 
-        // Nuskaitome profilį
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', userId)
-          .single();
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .single();
 
-        if (profile) {
-          setCurrentUser(profile);
+          if (profile) {
+            setCurrentUser(profile);
+          }
+          await loadMarketsAndLeaderboard(false, userId);
         } else {
-          // Jei profilio nėra, sukuriam dummy
-          setCurrentUser({
-            id: userId,
-            email: 'user@burgabet.lt',
-            full_name: 'Darbuotojas',
-            avatar_url: null,
-            token_balance: 1000,
-            is_admin: false
-          });
+          // Vartotojas neprisijungęs
+          setCurrentUser(null);
+          await loadMarketsAndLeaderboard(false, null);
         }
-
-        // Nuskaitome rinkas
-        const { data: dbMarkets } = await supabase
-          .from('markets')
-          .select('*')
-          .order('created_at', { ascending: false });
-        
-        if (dbMarkets) setMarkets(dbMarkets);
-
-        // Nuskaitome pozicijas
-        const { data: dbPositions } = await supabase
-          .from('positions')
-          .select('*')
-          .eq('user_id', userId);
-        
-        if (dbPositions) setPositions(dbPositions);
-
-        // Lyderių lentelė
-        const { data: dbLeaderboard } = await supabase
-          .from('profiles')
-          .select('*')
-          .order('token_balance', { ascending: false });
-        
-        if (dbLeaderboard) setLeaderboard(dbLeaderboard);
-
-        // Transakcijos
-        const { data: dbTrans } = await supabase
-          .from('transactions')
-          .select('*')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false });
-        
-        if (dbTrans) setTransactions(dbTrans);
-
       } catch (err) {
-        console.error("Supabase krovimo klaida, automatiškai perjungiamas Demo režimas:", err);
+        console.error("Supabase užklausos klaida, perjungiamas Demo režimas:", err);
         setIsDemoMode(true);
         loadInitialData(true);
         return;
@@ -265,9 +280,71 @@ export default function Dashboard() {
     setLoading(false);
   };
 
+  // Vykdyti autentifikaciją
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authEmail || !authPassword) {
+      setAuthError('Prašome užpildyti visus laukus.');
+      return;
+    }
+    
+    setAuthLoading(true);
+    setAuthError(null);
+
+    try {
+      if (authMode === 'login') {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+          options: {
+            data: {
+              full_name: authEmail.split('@')[0]
+            }
+          }
+        });
+        if (error) throw error;
+        alert('Registracija sėkminga! Galite prisijungti.');
+        setAuthMode('login');
+        setAuthLoading(false);
+        return;
+      }
+      
+      setIsAuthModalOpen(false);
+      setAuthEmail('');
+      setAuthPassword('');
+    } catch (err: any) {
+      setAuthError(err.message || 'Įvyko autentifikacijos klaida.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Atsijungti
+  const handleLogout = async () => {
+    if (isDemoMode) {
+      setCurrentUser(null);
+      alert('Atsijungėte iš demo profilio.');
+    } else {
+      await supabase.auth.signOut();
+    }
+  };
+
   // Vykdyti statymą (Pirkti YES/NO shares)
   const handlePlaceBet = async () => {
-    if (!selectedMarket || !currentUser) return;
+    if (!currentUser) {
+      // Jei vartotojas neprisijungęs, atidarome login modalą
+      setAuthMode('login');
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    if (!selectedMarket) return;
     const amount = parseFloat(betAmount);
     if (isNaN(amount) || amount <= 0) {
       setBetMessage({ type: 'error', text: 'Prašome įvesti teisingą žetonų kiekį.' });
@@ -283,7 +360,6 @@ export default function Dashboard() {
     setBetMessage(null);
 
     if (isDemoMode) {
-      // --- DEMO REŽIMAS (LOCALSTORAGE) ---
       setTimeout(() => {
         const localMarkets: Market[] = JSON.parse(localStorage.getItem('bb_markets') || '[]');
         const localProfiles: Profile[] = JSON.parse(localStorage.getItem('bb_profiles') || '[]');
@@ -302,16 +378,13 @@ export default function Dashboard() {
         const market = localMarkets[marketIdx];
         const user = localProfiles[userIdx];
 
-        // Skaičiuojame gautas akcijas pagal AMM formulę
         const shares = AMM.calculateBuyShares(market.yes_reserves, market.no_reserves, betOutcome, amount);
         const newReserves = AMM.getExpectedNewReserves(market.yes_reserves, market.no_reserves, betOutcome, amount);
 
-        // Atnaujiname rezervus ir balansus
         market.yes_reserves = newReserves.yesReserves;
         market.no_reserves = newReserves.noReserves;
         user.token_balance -= amount;
 
-        // Atnaujiname vartotojo poziciją
         let posIdx = localPositions.findIndex(p => p.user_id === user.id && p.market_id === market.id);
         if (posIdx === -1) {
           const newPos: Position = {
@@ -332,7 +405,6 @@ export default function Dashboard() {
           localPositions[posIdx].updated_at = new Date().toISOString();
         }
 
-        // Įrašome naują transakciją
         const newTx: Transaction = {
           id: 'tx_' + Date.now(),
           user_id: user.id,
@@ -345,20 +417,17 @@ export default function Dashboard() {
         };
         localTransactions.push(newTx);
 
-        // Išsaugome atgal į LocalStorage
         localStorage.setItem('bb_markets', JSON.stringify(localMarkets));
         localStorage.setItem('bb_profiles', JSON.stringify(localProfiles));
         localStorage.setItem('bb_positions', JSON.stringify(localPositions));
         localStorage.setItem('bb_transactions', JSON.stringify(localTransactions));
 
-        // Atnaujiname UI būsenas
         setCurrentUser({ ...user });
         setMarkets(localMarkets);
         setPositions(localPositions.filter(p => p.user_id === user.id));
         setTransactions(localTransactions.filter(t => t.user_id === user.id));
         setLeaderboard([...localProfiles].sort((a, b) => b.token_balance - a.token_balance));
 
-        // Atnaujiname šiuo metu pasirinktą rinką
         setSelectedMarket({ ...market });
         setBetMessage({ 
           type: 'success', 
@@ -368,9 +437,7 @@ export default function Dashboard() {
       }, 800);
 
     } else {
-      // --- REALUS SUPABASE REŽIMAS ---
       try {
-        // Iškviečiame saugią PostgreSQL RPC funkciją
         const { data: shares, error } = await supabase.rpc('place_bet', {
           p_market_id: selectedMarket.id,
           p_outcome: betOutcome,
@@ -384,10 +451,8 @@ export default function Dashboard() {
           text: `Sėkmingai atliktas statymas! Įsigijote ${Number(shares).toFixed(2)} ${betOutcome} akcijų.` 
         });
         
-        // Perkrauname duomenis iš DB, kad atnaujintume balansus ir rezervus
         await loadInitialData(false);
         
-        // Atnaujiname pasirinktą rinką modaliniame lange
         const updatedMarket = markets.find(m => m.id === selectedMarket.id);
         if (updatedMarket) setSelectedMarket(updatedMarket);
 
@@ -405,7 +470,6 @@ export default function Dashboard() {
     setSellLoading(marketId + '_' + outcome);
 
     if (isDemoMode) {
-      // --- DEMO REŽIMAS ---
       setTimeout(() => {
         const localMarkets: Market[] = JSON.parse(localStorage.getItem('bb_markets') || '[]');
         const localProfiles: Profile[] = JSON.parse(localStorage.getItem('bb_profiles') || '[]');
@@ -426,10 +490,8 @@ export default function Dashboard() {
         const user = localProfiles[userIdx];
         const position = localPositions[posIdx];
 
-        // Skaičiuojame atgalinį AMM algoritmą
         const refundTokens = AMM.calculateSellRefund(market.yes_reserves, market.no_reserves, outcome, sharesCount);
         
-        // Atnaujiname rezervus pardavimui
         const S = sharesCount;
         const B = -(market.yes_reserves + market.no_reserves + S);
         const C_quad = outcome === 'YES' ? S * market.no_reserves : S * market.yes_reserves;
@@ -448,7 +510,6 @@ export default function Dashboard() {
 
         user.token_balance += refundTokens;
 
-        // Pridedame transakciją (neigiama suma, nes gaunami pinigai)
         const newTx: Transaction = {
           id: 'tx_' + Date.now(),
           user_id: user.id,
@@ -461,18 +522,15 @@ export default function Dashboard() {
         };
         localTransactions.push(newTx);
 
-        // Jei nebeliko akcijų, ištriname poziciją
         if (position.yes_shares <= 0 && position.no_shares <= 0) {
           localPositions.splice(posIdx, 1);
         }
 
-        // Išsaugome atgal
         localStorage.setItem('bb_markets', JSON.stringify(localMarkets));
         localStorage.setItem('bb_profiles', JSON.stringify(localProfiles));
         localStorage.setItem('bb_positions', JSON.stringify(localPositions));
         localStorage.setItem('bb_transactions', JSON.stringify(localTransactions));
 
-        // Atnaujiname UI
         setCurrentUser({ ...user });
         setMarkets(localMarkets);
         setPositions(localPositions.filter(p => p.user_id === user.id));
@@ -483,7 +541,6 @@ export default function Dashboard() {
         alert(`Parduota! Susigrąžinote ${refundTokens.toFixed(2)} žetonų.`);
       }, 800);
     } else {
-      // --- REALUS SUPABASE REŽIMAS ---
       try {
         const { data: refund, error } = await supabase.rpc('sell_shares', {
           p_market_id: marketId,
@@ -543,7 +600,6 @@ export default function Dashboard() {
       setAdminMessage({ type: 'success', text: 'Nauja spėjimų rinka sėkmingai sukurta!' });
     } else {
       try {
-        // Tikram Supabase įrašome rinką (RLS leis tik jei esame admin)
         const { error } = await supabase.from('markets').insert({
           question: newQuestion,
           description: newDescription || null,
@@ -557,7 +613,7 @@ export default function Dashboard() {
         setNewQuestion('');
         setNewDescription('');
         setAdminMessage({ type: 'success', text: 'Rinka sėkmingai sukurta Supabase duomenų bazėje!' });
-        await loadInitialData(false);
+        await loadMarketsAndLeaderboard(false, currentUser?.id || null);
       } catch (err: any) {
         setAdminMessage({ type: 'error', text: err.message || 'Klaida kuriant rinką Supabase.' });
       }
@@ -566,12 +622,11 @@ export default function Dashboard() {
 
   // Išspręsti rinką (Admin)
   const handleResolveMarket = async (marketId: string, winningOutcome: 'YES' | 'NO') => {
-    if (!confirm(`Ar tikrai norite uždaryti šią rinką su rezultatu ${winningOutcome}? Šis veiksmas išdalins žetonus laimėtojams ir negali būti atšauktas.`)) {
+    if (!confirm(`Ar tikrai norite uždaryti šią rinką su rezultatu ${winningOutcome}? Šis veiksmas išdalins žetonus laimėtojams.`)) {
       return;
     }
 
     if (isDemoMode) {
-      // --- DEMO REŽIMAS ---
       const localMarkets: Market[] = JSON.parse(localStorage.getItem('bb_markets') || '[]');
       const localProfiles: Profile[] = JSON.parse(localStorage.getItem('bb_profiles') || '[]');
       const localPositions: Position[] = JSON.parse(localStorage.getItem('bb_positions') || '[]');
@@ -585,7 +640,6 @@ export default function Dashboard() {
       market.outcome = winningOutcome;
       market.resolved_at = new Date().toISOString();
 
-      // Išmokėjimai vartotojams
       localPositions.forEach(pos => {
         if (pos.market_id === marketId) {
           const shares = winningOutcome === 'YES' ? pos.yes_shares : pos.no_shares;
@@ -595,7 +649,6 @@ export default function Dashboard() {
             if (profile) {
               profile.token_balance += payout;
               
-              // Pridedame payout transakciją
               localTransactions.push({
                 id: 'tx_pay_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
                 user_id: pos.user_id,
@@ -611,12 +664,10 @@ export default function Dashboard() {
         }
       });
 
-      // Išsaugome
       localStorage.setItem('bb_markets', JSON.stringify(localMarkets));
       localStorage.setItem('bb_profiles', JSON.stringify(localProfiles));
       localStorage.setItem('bb_transactions', JSON.stringify(localTransactions));
 
-      // Atnaujiname UI
       setMarkets(localMarkets);
       if (currentUser) {
         const myProfile = localProfiles.find(p => p.id === currentUser.id);
@@ -626,9 +677,8 @@ export default function Dashboard() {
       setTransactions(localTransactions.filter(t => t.user_id === currentUser?.id));
       setLeaderboard([...localProfiles].sort((a, b) => b.token_balance - a.token_balance));
 
-      alert('Rinka sėkmingai uždaryta, laimėjimai pervesti darbuotojams!');
+      alert('Rinka sėkmingai uždaryta!');
     } else {
-      // --- REALUS SUPABASE REŽIMAS ---
       try {
         const { error } = await supabase.rpc('resolve_market', {
           p_market_id: marketId,
@@ -637,7 +687,7 @@ export default function Dashboard() {
 
         if (error) throw error;
 
-        alert('Rinka uždaryta Supabase duomenų bazėje!');
+        alert('Rinka uždaryta!');
         await loadInitialData(false);
       } catch (err: any) {
         alert(err.message || 'Klaida uždarant rinką.');
@@ -645,7 +695,6 @@ export default function Dashboard() {
     }
   };
 
-  // Skaičiuojame atviros pozicijos vertę
   const calculatePositionValue = (pos: Position, market: Market) => {
     let value = 0;
     if (pos.yes_shares > 0) {
@@ -657,7 +706,6 @@ export default function Dashboard() {
     return Math.round(value * 100) / 100;
   };
 
-  // Vartotojo bendras kapitalas (Balansas + Pozicijų vertė)
   const getUserNetWorth = (profile: Profile) => {
     let worth = profile.token_balance;
     if (profile.id === currentUser?.id) {
@@ -680,7 +728,6 @@ export default function Dashboard() {
     );
   }
 
-  // Pre-calculations statymų langui
   const currentSpotPrice = selectedMarket 
     ? AMM.getSpotPrice(selectedMarket.yes_reserves, selectedMarket.no_reserves, betOutcome)
     : 0;
@@ -710,27 +757,48 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* PROFILE SUMMARY */}
-        <div className="flex items-center gap-4 bg-zinc-900/60 border border-zinc-800 p-4 rounded-2xl backdrop-blur-md">
-          <div className="flex items-center justify-center w-10 h-10 rounded-full bg-zinc-800 border border-zinc-700 text-emerald-400 font-bold uppercase">
-            {currentUser?.full_name?.charAt(0) || 'U'}
-          </div>
-          <div>
-            <div className="text-sm font-semibold">{currentUser?.full_name}</div>
-            <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-base">
-              <Coins className="w-4 h-4" />
-              <span>{currentUser?.token_balance.toFixed(1)} žetonai</span>
+        {/* PROFILE SUMMARY / AUTH */}
+        {currentUser ? (
+          <div className="flex items-center gap-4 bg-zinc-900/60 border border-zinc-800 p-4 rounded-2xl backdrop-blur-md">
+            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-zinc-800 border border-zinc-700 text-emerald-400 font-bold uppercase">
+              {currentUser.full_name?.charAt(0) || 'U'}
             </div>
+            <div>
+              <div className="text-sm font-semibold">{currentUser.full_name}</div>
+              <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-base">
+                <Coins className="w-4 h-4" />
+                <span>{currentUser.token_balance.toFixed(1)} žetonai</span>
+              </div>
+            </div>
+            
+            <div className="h-8 w-px bg-zinc-800 mx-1"></div>
+            
+            <button 
+              onClick={handleLogout} 
+              className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-rose-400 transition-colors"
+              title="Atsijungti"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
-          
-          <button 
-            onClick={() => loadInitialData(isDemoMode)} 
-            className="p-2 ml-2 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors"
-            title="Atnaujinti duomenis"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
-        </div>
+        ) : (
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => { setAuthMode('login'); setIsAuthModalOpen(true); }}
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-200 text-sm font-bold rounded-xl transition-all"
+            >
+              <LogIn className="w-4 h-4" />
+              Prisijungti
+            </button>
+            <button
+              onClick={() => { setAuthMode('signup'); setIsAuthModalOpen(true); }}
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-emerald-600/15"
+            >
+              <UserPlus className="w-4 h-4" />
+              Registruotis
+            </button>
+          </div>
+        )}
       </header>
 
       {/* BENDRAS PRANEŠIMAS APIE REŽIMĄ */}
@@ -756,10 +824,9 @@ export default function Dashboard() {
             </>
           )}
         </div>
-        {isDemoMode && (
+        {isDemoMode && currentUser && (
           <button 
             onClick={() => {
-              // Simuliuojame admin teisių perjungimą demo režime
               if (currentUser) {
                 const toggled = !currentUser.is_admin;
                 const localProfiles = JSON.parse(localStorage.getItem('bb_profiles') || '[]');
@@ -773,7 +840,7 @@ export default function Dashboard() {
             }}
             className="text-[10px] bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold px-2 py-1 rounded"
           >
-            {currentUser?.is_admin ? 'Atsisakyti Admin teisių' : 'Tapti Admin (Demo)'}
+            {currentUser.is_admin ? 'Atsisakyti Admin teisių' : 'Tapti Admin (Demo)'}
           </button>
         )}
       </div>
@@ -877,19 +944,16 @@ export default function Dashboard() {
                           </p>
                         </div>
 
-                        {/* ODDS / PROBABILITIES */}
                         <div className="mt-6 pt-4 border-t border-zinc-800/80">
                           <div className="flex justify-between items-center text-xs text-zinc-500 mb-2">
                             <span>YES tikimybė</span>
                             <span>NO tikimybė</span>
                           </div>
                           <div className="flex gap-2">
-                            {/* YES BUTTON SIMULATOR */}
                             <div className="flex-1 flex items-center justify-between p-2.5 rounded-xl bg-emerald-950/20 border border-emerald-900/50 text-emerald-400">
                               <span className="font-semibold text-sm">YES</span>
                               <span className="font-bold text-base">{priceYes.toFixed(0)}%</span>
                             </div>
-                            {/* NO BUTTON SIMULATOR */}
                             <div className="flex-1 flex items-center justify-between p-2.5 rounded-xl bg-rose-950/20 border border-rose-900/50 text-rose-400">
                               <span className="font-semibold text-sm">NO</span>
                               <span className="font-bold text-base">{priceNo.toFixed(0)}%</span>
@@ -934,7 +998,7 @@ export default function Dashboard() {
 
             </div>
 
-            {/* QUICK BET AREA (RIGHT PANEL) */}
+            {/* QUICK BET AREA */}
             <div className="lg:col-span-1">
               <div className="sticky top-6 p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-xl">
                 <h2 className="text-xl font-bold flex items-center gap-2 border-b border-zinc-800 pb-4 mb-4 text-white">
@@ -949,7 +1013,6 @@ export default function Dashboard() {
                       <p className="text-sm font-bold text-white mt-1 leading-snug">{selectedMarket.question}</p>
                     </div>
 
-                    {/* CHOICE SELECTOR (YES/NO) */}
                     <div>
                       <span className="text-xs text-zinc-400 block mb-2 font-semibold">Pasirinkimas</span>
                       <div className="flex gap-2 bg-zinc-950 p-1 rounded-xl">
@@ -978,11 +1041,10 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    {/* INPUT AMOUNT */}
                     <div>
                       <div className="flex justify-between text-xs text-zinc-400 mb-2">
                         <span className="font-semibold">Žetonų suma</span>
-                        <span>Balansas: {currentUser?.token_balance.toFixed(0)}</span>
+                        <span>Balansas: {currentUser ? currentUser.token_balance.toFixed(0) : '0'}</span>
                       </div>
                       <div className="relative">
                         <input
@@ -990,27 +1052,29 @@ export default function Dashboard() {
                           value={betAmount}
                           onChange={(e) => setBetAmount(e.target.value)}
                           placeholder="Sum"
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-3 pl-4 pr-12 text-white font-bold text-lg focus:outline-none focus:border-emerald-500 transition-colors"
+                          disabled={!currentUser}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-3 pl-4 pr-12 text-white font-bold text-lg focus:outline-none focus:border-emerald-500 transition-colors disabled:opacity-50"
                         />
                         <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-zinc-500 font-bold">
                           Tokenų
                         </span>
                       </div>
-                      <div className="flex gap-1.5 mt-2">
-                        {['10', '50', '100', '250'].map(val => (
-                          <button
-                            key={val}
-                            type="button"
-                            onClick={() => setBetAmount(val)}
-                            className="text-[10px] font-bold bg-zinc-850 hover:bg-zinc-800 text-zinc-300 px-2.5 py-1 rounded-md"
-                          >
-                            {val}
-                          </button>
-                        ))}
-                      </div>
+                      {currentUser && (
+                        <div className="flex gap-1.5 mt-2">
+                          {['10', '50', '100', '250'].map(val => (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() => setBetAmount(val)}
+                              className="text-[10px] font-bold bg-zinc-850 hover:bg-zinc-800 text-zinc-300 px-2.5 py-1 rounded-md"
+                            >
+                              {val}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
-                    {/* PREVIEW DETAILS */}
                     <div className="bg-zinc-950 rounded-xl p-4 text-xs space-y-2.5 border border-zinc-800/50">
                       <div className="flex justify-between">
                         <span className="text-zinc-400">Momentinė kaina (1 share):</span>
@@ -1032,7 +1096,6 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    {/* MESSAGES */}
                     {betMessage && (
                       <div className={`p-3 rounded-xl text-xs flex gap-2 ${
                         betMessage.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
@@ -1042,22 +1105,25 @@ export default function Dashboard() {
                       </div>
                     )}
 
-                    {/* SUBMIT BUTTON */}
                     <button
                       type="button"
                       onClick={handlePlaceBet}
-                      disabled={betLoading || !betAmount || parseFloat(betAmount) <= 0}
+                      disabled={betLoading || (!!currentUser && (!betAmount || parseFloat(betAmount) <= 0))}
                       className={`w-full py-3.5 rounded-xl font-bold text-sm transition-all shadow-lg flex items-center justify-center gap-2 ${
-                        betOutcome === 'YES'
-                          ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/10'
-                          : 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/10'
-                      } disabled:opacity-50 disabled:cursor-not-allowed`}
+                        !currentUser 
+                          ? 'bg-emerald-600 hover:bg-emerald-500 text-white' 
+                          : betOutcome === 'YES'
+                            ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/10'
+                            : 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/10'
+                      } disabled:opacity-50`}
                     >
                       {betLoading ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" />
                           Statymas vykdomas...
                         </>
+                      ) : !currentUser ? (
+                        'Prisijunkite, kad statytumėte'
                       ) : (
                         `Statyti ${betAmount || '0'} žetonų už ${betOutcome}`
                       )}
@@ -1080,14 +1146,17 @@ export default function Dashboard() {
         {activeTab === 'portfolio' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             
-            {/* PORTFOLIO (LEFT / 2 COLS) */}
             <div className="lg:col-span-2 space-y-6">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <Briefcase className="w-5 h-5 text-emerald-500" />
                 Mano atviros pozicijos
               </h2>
 
-              {positions.length === 0 ? (
+              {!currentUser ? (
+                <div className="p-12 text-center rounded-2xl bg-zinc-900/30 border border-zinc-800 text-zinc-500">
+                  Prisijunkite, kad pamatytumėte savo atviras pozicijas.
+                </div>
+              ) : positions.length === 0 ? (
                 <div className="p-12 text-center rounded-2xl bg-zinc-900/30 border border-zinc-800 text-zinc-500">
                   Neturite atvirų pozicijų. Atlikite spėjimą „Rinkos“ skiltyje!
                 </div>
@@ -1150,7 +1219,9 @@ export default function Dashboard() {
               <div className="pt-6">
                 <h3 className="text-lg font-bold text-zinc-300 mb-4">Statymų istorija</h3>
                 <div className="bg-zinc-900/30 border border-zinc-800/80 rounded-2xl overflow-hidden text-sm">
-                  {transactions.length === 0 ? (
+                  {!currentUser ? (
+                    <div className="p-6 text-center text-zinc-500 text-xs">Prisijunkite, kad pamatytumėte statymų istoriją.</div>
+                  ) : transactions.length === 0 ? (
                     <div className="p-6 text-center text-zinc-500 text-xs">Istorija tuščia.</div>
                   ) : (
                     <div className="divide-y divide-zinc-800/80">
@@ -1197,7 +1268,7 @@ export default function Dashboard() {
 
             </div>
 
-            {/* LEADERBOARD (RIGHT COLUMN) */}
+            {/* LEADERBOARD */}
             <div className="lg:col-span-1 space-y-6">
               <h2 className="text-xl font-bold flex items-center gap-2">
                 <Award className="w-5 h-5 text-emerald-500" />
@@ -1244,6 +1315,9 @@ export default function Dashboard() {
                       </div>
                     );
                   })}
+                  {leaderboard.length === 0 && (
+                    <div className="p-6 text-center text-zinc-500 text-xs">Vartotojų dar nėra. Užregistruokite pirmąjį!</div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1255,7 +1329,6 @@ export default function Dashboard() {
         {activeTab === 'admin' && currentUser?.is_admin && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             
-            {/* RESOLUTION ACTIONS (LEFT / 2 COLS) */}
             <div className="lg:col-span-2 space-y-6">
               <h2 className="text-xl font-bold flex items-center gap-2 text-white">
                 <ShieldAlert className="w-5 h-5 text-rose-500" />
@@ -1304,7 +1377,6 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* CREATE MARKET FORM (RIGHT COLUMN) */}
             <div className="lg:col-span-1">
               <div className="p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-xl">
                 <h2 className="text-xl font-bold flex items-center gap-2 border-b border-zinc-800 pb-4 mb-4 text-white">
@@ -1375,6 +1447,104 @@ export default function Dashboard() {
         )}
 
       </main>
+
+      {/* AUTH MODAL */}
+      {isAuthModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-md p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl relative">
+            <button
+              onClick={() => setIsAuthModalOpen(false)}
+              className="absolute right-4 top-4 p-1 hover:bg-zinc-855 rounded-lg text-zinc-400 hover:text-white"
+            >
+              <XCircle className="w-5 h-5" />
+            </button>
+
+            <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+              {authMode === 'login' ? <LogIn className="w-5 h-5 text-emerald-500" /> : <UserPlus className="w-5 h-5 text-emerald-500" />}
+              {authMode === 'login' ? 'Prisijungti prie BurgaBet' : 'Sukurti paskyrą'}
+            </h3>
+            <p className="text-xs text-zinc-400 mb-6">
+              {authMode === 'login' 
+                ? 'Prisijunkite prie sistemos naudodami savo įmonės el. paštą.' 
+                : 'Užsiregistruokite įmonės el. paštu ir gausite 1000 nemokamų žetonų.'}
+            </p>
+
+            <form onSubmit={handleAuthSubmit} className="space-y-4">
+              <div>
+                <label className="text-xs text-zinc-400 font-semibold block mb-1.5">El. paštas</label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="vardas@imone.lt"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-4 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Slaptažodis</label>
+                <input
+                  type="password"
+                  required
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-4 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+
+              {authError && (
+                <div className="p-3 rounded-xl bg-rose-500/10 text-rose-400 border border-rose-500/20 text-xs flex gap-2">
+                  <XCircle className="w-4 h-4 shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl font-bold text-sm transition-colors shadow-lg flex items-center justify-center gap-2"
+              >
+                {authLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Kraunama...
+                  </>
+                ) : authMode === 'login' ? (
+                  'Prisijungti'
+                ) : (
+                  'Registruotis'
+                )}
+              </button>
+            </form>
+
+            <div className="mt-4 pt-4 border-t border-zinc-800 text-center text-xs">
+              {authMode === 'login' ? (
+                <span className="text-zinc-400">
+                  Neturite paskyros?{' '}
+                  <button
+                    onClick={() => setAuthMode('signup')}
+                    className="text-emerald-400 font-semibold hover:underline"
+                  >
+                    Registruotis
+                  </button>
+                </span>
+              ) : (
+                <span className="text-zinc-400">
+                  Jau turite paskyrą?{' '}
+                  <button
+                    onClick={() => setAuthMode('login')}
+                    className="text-emerald-400 font-semibold hover:underline"
+                  >
+                    Prisijungti
+                  </button>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
