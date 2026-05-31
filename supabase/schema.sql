@@ -92,9 +92,9 @@ create or replace function public.check_profile_updates()
 returns trigger as $$
 begin
     if (OLD.token_balance <> NEW.token_balance or OLD.is_admin <> NEW.is_admin) then
-        -- Tikriname, ar pakeitimas vykdomas per saugias funkcijas (kurios veikia kaip superuser ar bypass)
-        -- Jei tai tiesioginis vartotojo užklausimas, blokuojame
-        if current_setting('role', true) <> 'superuser' then
+        -- Blokuojame tik tiesioginius atnaujinimus iš naršyklės (kurie naudoja 'authenticated' arba 'anon' roles)
+        -- RPC funkcijos (place_bet, sell_shares) veikia kaip SECURITY DEFINER (vykdomos kaip 'postgres' arba DB savininkas), todėl bus praleidžiamos
+        if current_user in ('authenticated', 'anon') then
             raise exception 'Negalima tiesiogiai keisti balanso ar administratoriaus teisių!';
         end if;
     end if;
