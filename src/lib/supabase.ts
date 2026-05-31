@@ -12,5 +12,11 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-// Inicijuojame bendrą Supabase klientą aplikacijai
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Inicijuojame bendrą Supabase klientą aplikacijai su aiškiais sesijos išsaugojimo nustatymais
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true
+  }
+});

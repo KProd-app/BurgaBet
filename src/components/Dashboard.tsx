@@ -223,18 +223,29 @@ export default function Dashboard() {
     let channel: any = null;
 
     if (hasKeys) {
-      // 1. Sekame naudotojo prisijungimus
+      // 1. Sekame naudotojo prisijungimus ir keičiame būseną atitinkamai pagal sesijos buvimą
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
         if (!isMounted) return;
-        if (event === 'SIGNED_IN') {
-          await loadInitialData(false);
-        } else if (event === 'SIGNED_OUT') {
-          setCurrentUser(null);
-          setPositions([]);
-          setTransactions([]);
-          setLoading(true);
-          await loadMarketsAndLeaderboard(false, null);
-          if (isMounted) setLoading(false);
+        
+        console.log(`Supabase Auth įvykis: ${event}`, session ? `Vartotojas: ${session.user.email}` : 'Nėra sesijos');
+
+        if (session) {
+          // Vartotojas prisijungęs arba sesija atnaujinta.
+          // Užkrauname pradinius duomenis tik jei vartotojas pasikeitė arba dar nėra užkrautas.
+          if (currentUserRef.current?.id !== session.user.id) {
+            await loadInitialData(false);
+          }
+        } else {
+          // Vartotojas atsijungęs.
+          // Jei anksčiau turėjome vartotoją (buvome prisijungę), išvalome būseną.
+          if (currentUserRef.current !== null) {
+            setCurrentUser(null);
+            setPositions([]);
+            setTransactions([]);
+            setLoading(true);
+            await loadMarketsAndLeaderboard(false, null);
+            if (isMounted) setLoading(false);
+          }
         }
       });
       authSubscription = subscription;
