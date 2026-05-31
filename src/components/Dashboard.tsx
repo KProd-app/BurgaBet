@@ -273,51 +273,39 @@ export default function Dashboard() {
   const loadMarketsAndLeaderboard = async (demo: boolean, userId: string | null) => {
     if (demo) return;
     try {
-      // 1. Kategorijos
-      const { data: dbCats } = await supabase
-        .from('categories')
-        .select('*')
-        .order('name', { ascending: true });
-      if (dbCats) setCategories(dbCats);
-
-      // 2. Rinkos
-      const { data: dbMarkets } = await supabase
-        .from('markets')
-        .select('*')
-        .order('created_at', { ascending: false });
-      if (dbMarkets) setMarkets(dbMarkets);
-
-      // 3. Lyderiai
-      const { data: dbLeaderboard } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('token_balance', { ascending: false });
-      if (dbLeaderboard) setLeaderboard(dbLeaderboard);
+      console.log("loadMarketsAndLeaderboard: Pradedamas foninis lygiagretus krovimas...");
+      const promises: any[] = [
+        supabase.from('categories').select('*').order('name', { ascending: true }),
+        supabase.from('markets').select('*').order('created_at', { ascending: false }),
+        supabase.from('profiles').select('*').order('token_balance', { ascending: false })
+      ];
 
       if (userId) {
-        // Profilis
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', userId)
-          .single();
+        promises.push(supabase.from('profiles').select('*').eq('id', userId).single());
+        promises.push(supabase.from('positions').select('*').eq('user_id', userId));
+        promises.push(supabase.from('transactions').select('*').eq('user_id', userId).order('created_at', { ascending: false }));
+      }
+
+      const results = await Promise.all(promises);
+
+      const dbCats = results[0].data;
+      const dbMarkets = results[1].data;
+      const dbLeaderboard = results[2].data;
+
+      if (dbCats) setCategories(dbCats);
+      if (dbMarkets) setMarkets(dbMarkets);
+      if (dbLeaderboard) setLeaderboard(dbLeaderboard);
+
+      if (userId && results.length >= 6) {
+        const profile = results[3].data;
+        const dbPositions = results[4].data;
+        const dbTrans = results[5].data;
+
         if (profile) setCurrentUser(profile);
-
-        // Pozicijos
-        const { data: dbPositions } = await supabase
-          .from('positions')
-          .select('*')
-          .eq('user_id', userId);
         if (dbPositions) setPositions(dbPositions);
-
-        // Transakcijos
-        const { data: dbTrans } = await supabase
-          .from('transactions')
-          .select('*')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false });
         if (dbTrans) setTransactions(dbTrans);
       }
+      console.log("loadMarketsAndLeaderboard: Foninis krovimas sėkmingai baigtas!");
     } catch (e) {
       console.error("Klaida sinchronizuojant DB fone:", e);
     }
@@ -430,14 +418,30 @@ export default function Dashboard() {
         if (session) {
           const userId = session.user.id;
           
-          // Apjungiame visus Supabase krovimo veiksmus ir apribojame bendru laiko limitu (timeout)
+           // Apjungiame visus Supabase krovimo veiksmus ir apribojame bendru laiko limitu (timeout)
           const loadDataSteps = async () => {
-            console.log("loadInitialData: Užklausiamas profilis vartotojui:", userId);
-            const { data: profile, error: profileErr } = await supabase
-              .from('profiles')
-              .select('*')
-              .eq('id', userId)
-              .single();
+            console.log("loadInitialData: Pradedamas lygiagretus duomenų krovimas iš Supabase vartotojui:", userId);
+            
+            const promises = [
+              supabase.from('profiles').select('*').eq('id', userId).single(),
+              supabase.from('categories').select('*').order('name', { ascending: true }),
+              supabase.from('markets').select('*').order('created_at', { ascending: false }),
+              supabase.from('profiles').select('*').order('token_balance', { ascending: false }),
+              supabase.from('positions').select('*').eq('user_id', userId),
+              supabase.from('transactions').select('*').eq('user_id', userId).order('created_at', { ascending: false })
+            ];
+
+            const [
+              profileRes,
+              catsRes,
+              marketsRes,
+              leaderboardRes,
+              positionsRes,
+              transactionsRes
+            ] = await Promise.all(promises);
+
+            const profile = profileRes.data;
+            const profileErr = profileRes.error;
 
             if (profileErr) {
               console.warn("loadInitialData: Nepavyko gauti profilio iš lentelės:", profileErr.message);
@@ -478,7 +482,14 @@ export default function Dashboard() {
                 setCurrentUser(tempProfile);
               }
             }
-            await loadMarketsAndLeaderboard(false, userId);
+
+            // Nustatome visus likusius duomenis, gautus lygiagrečiai
+            if (catsRes.data) setCategories(catsRes.data);
+            if (marketsRes.data) setMarkets(marketsRes.data);
+            if (leaderboardRes.data) setLeaderboard(leaderboardRes.data);
+            if (positionsRes.data) setPositions(positionsRes.data);
+            if (transactionsRes.data) setTransactions(transactionsRes.data);
+            console.log("loadInitialData: Lygiagretus krovimas sėkmingai baigtas!");
           };
 
           const timeoutPromise = new Promise<void>((_, reject) =>
