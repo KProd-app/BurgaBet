@@ -482,7 +482,7 @@ export default function Dashboard() {
           };
 
           const timeoutPromise = new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error("Duomenų krovimo iš Supabase laikas baigėsi (timeout)")), 25000)
+            setTimeout(() => reject(new Error("Duomenų krovimo iš Supabase laikas baigėsi (timeout)")), 45000)
           );
 
           await Promise.race([loadDataSteps(), timeoutPromise]);
