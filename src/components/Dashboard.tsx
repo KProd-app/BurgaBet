@@ -178,6 +178,7 @@ export default function Dashboard() {
   };
 
   const currentUserRef = useRef<Profile | null>(null);
+  const isInitialLoadInProgressRef = useRef<boolean>(false);
 
   useEffect(() => {
     currentUserRef.current = currentUser;
@@ -214,9 +215,16 @@ export default function Dashboard() {
         console.log(`Supabase Auth įvykis: ${event}, Sesija egzistuoja: ${!!session}`, session ? `Vartotojas: ${session.user.email}` : 'Nėra sesijos');
 
         if (session) {
-          if (currentUserRef.current?.id !== session.user.id) {
+          if (currentUserRef.current?.id !== session.user.id && !isInitialLoadInProgressRef.current) {
+            isInitialLoadInProgressRef.current = true;
             console.log("Aptiktas naujas prisijungimas arba sesijos atstatymas. Kraunami vartotojo duomenys...");
-            await loadInitialData(false);
+            try {
+              await loadInitialData(false, session);
+            } finally {
+              isInitialLoadInProgressRef.current = false;
+            }
+          } else {
+            console.log("onAuthStateChange: loadInitialData praleidžiamas, nes vartotojas nesikeičia arba krovimas jau vyksta.");
           }
         } else {
           console.log("onAuthStateChange: Vartotojas neprisijungęs.");
@@ -307,7 +315,7 @@ export default function Dashboard() {
     }
   };
 
-  const loadInitialData = async (demo: boolean) => {
+  const loadInitialData = async (demo: boolean, initialSession: any = null) => {
     console.log("loadInitialData: Pradėtas krovimas, demo =", demo);
     setLoading(true);
     try {
@@ -403,9 +411,13 @@ export default function Dashboard() {
         setLeaderboard([...localProfiles].sort((a, b) => b.token_balance - a.token_balance));
         setTransactions(localTransactions.filter(t => t.user_id === me.id));
       } else {
-        console.log("loadInitialData: Nuskaitoma Supabase sesija...");
-        const { data: { session } } = await supabase.auth.getSession();
-        console.log("loadInitialData: Gauta sesija:", session ? `Yra (${session.user.email})` : "Nėra");
+        let session = initialSession;
+        if (!session) {
+          console.log("loadInitialData: initialSession neperduotas, nuskaitoma Supabase sesija...");
+          const { data: { session: currentSession } } = await supabase.auth.getSession();
+          session = currentSession;
+        }
+        console.log("loadInitialData: Naudojama sesija:", session ? `Yra (${session.user.email})` : "Nėra");
         
         if (session) {
           const userId = session.user.id;
