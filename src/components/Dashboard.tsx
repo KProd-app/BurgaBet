@@ -193,27 +193,11 @@ export default function Dashboard() {
     let isMounted = true;
 
     const init = async () => {
+      console.log("init() paleistas, hasKeys =", hasKeys);
       if (!hasKeys) {
         await loadInitialData(true);
       } else {
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (isMounted) {
-            if (session) {
-              await loadInitialData(false);
-            } else {
-              setLoading(true);
-              await loadMarketsAndLeaderboard(false, null);
-              if (isMounted) setLoading(false);
-            }
-          }
-        } catch (e) {
-          console.error("Pradinio užkrovimo klaida:", e);
-          if (isMounted) {
-            setIsDemoMode(true);
-            await loadInitialData(true);
-          }
-        }
+        console.log("Supabase režimas aktyvus. Laukiame onAuthStateChange sesijos užkrovimui...");
       }
     };
 
@@ -227,25 +211,22 @@ export default function Dashboard() {
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
         if (!isMounted) return;
         
-        console.log(`Supabase Auth įvykis: ${event}`, session ? `Vartotojas: ${session.user.email}` : 'Nėra sesijos');
+        console.log(`Supabase Auth įvykis: ${event}, Sesija egzistuoja: ${!!session}`, session ? `Vartotojas: ${session.user.email}` : 'Nėra sesijos');
 
         if (session) {
-          // Vartotojas prisijungęs arba sesija atnaujinta.
-          // Užkrauname pradinius duomenis tik jei vartotojas pasikeitė arba dar nėra užkrautas.
           if (currentUserRef.current?.id !== session.user.id) {
+            console.log("Aptiktas naujas prisijungimas arba sesijos atstatymas. Kraunami vartotojo duomenys...");
             await loadInitialData(false);
           }
         } else {
-          // Vartotojas atsijungęs.
-          // Jei anksčiau turėjome vartotoją (buvome prisijungę), išvalome būseną.
-          if (currentUserRef.current !== null) {
-            setCurrentUser(null);
-            setPositions([]);
-            setTransactions([]);
-            setLoading(true);
-            await loadMarketsAndLeaderboard(false, null);
-            if (isMounted) setLoading(false);
-          }
+          console.log("onAuthStateChange: Vartotojas neprisijungęs.");
+          // Visada išvalome vartotojo duomenis ir užkrauname tik viešąją informaciją (rinkas ir lyderių lentelę)
+          setCurrentUser(null);
+          setPositions([]);
+          setTransactions([]);
+          setLoading(true);
+          await loadMarketsAndLeaderboard(false, null);
+          if (isMounted) setLoading(false);
         }
       });
       authSubscription = subscription;
@@ -327,6 +308,7 @@ export default function Dashboard() {
   };
 
   const loadInitialData = async (demo: boolean) => {
+    console.log("loadInitialData: Pradėtas krovimas, demo =", demo);
     setLoading(true);
     try {
       if (demo) {
@@ -421,19 +403,28 @@ export default function Dashboard() {
         setLeaderboard([...localProfiles].sort((a, b) => b.token_balance - a.token_balance));
         setTransactions(localTransactions.filter(t => t.user_id === me.id));
       } else {
+        console.log("loadInitialData: Nuskaitoma Supabase sesija...");
         const { data: { session } } = await supabase.auth.getSession();
+        console.log("loadInitialData: Gauta sesija:", session ? `Yra (${session.user.email})` : "Nėra");
         
         if (session) {
           const userId = session.user.id;
-          const { data: profile } = await supabase
+          console.log("loadInitialData: Užklausiamas profilis vartotojui:", userId);
+          const { data: profile, error: profileErr } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', userId)
             .single();
 
+          if (profileErr) {
+            console.warn("loadInitialData: Nepavyko gauti profilio iš lentelės:", profileErr.message);
+          }
+
           if (profile) {
+            console.log("loadInitialData: Profilis sėkmingai rastas, nustatomas:", profile);
             setCurrentUser(profile);
           } else {
+            console.log("loadInitialData: Profilio lentelėje nėra įrašo. Naudojamas saugiklio profilis.");
             // Saugiklis: jei vartotojas prisijungęs per Auth, bet profilio lentelėje dar nėra įrašo
             setCurrentUser({
               id: userId,
