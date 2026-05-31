@@ -447,15 +447,36 @@ export default function Dashboard() {
               console.log("loadInitialData: Profilis sėkmingai rastas, nustatomas:", profile);
               setCurrentUser(profile);
             } else {
-              console.log("loadInitialData: Profilio lentelėje nėra įrašo. Naudojamas saugiklio profilis.");
-              setCurrentUser({
+              console.log("loadInitialData: Profilio lentelėje nėra įrašo. Bandoma sukurti naują įrašą...");
+              const tempProfile = {
                 id: userId,
                 email: session.user.email || '',
                 full_name: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Vartotojas',
                 avatar_url: session.user.user_metadata?.avatar_url || null,
                 token_balance: 1000.0,
-                is_admin: false
-              });
+                is_admin: session.user.email === 'admin@burgabet.wtf'
+              };
+
+              try {
+                const { data: newProfile, error: insertErr } = await supabase
+                  .from('profiles')
+                  .insert([tempProfile])
+                  .select()
+                  .single();
+
+                if (insertErr) {
+                  console.warn("loadInitialData: Nepavyko sukurti profilio įrašo duomenų bazėje:", insertErr.message);
+                  setCurrentUser(tempProfile);
+                } else if (newProfile) {
+                  console.log("loadInitialData: Profilis sėkmingai sukurtas duomenų bazėje:", newProfile);
+                  setCurrentUser(newProfile);
+                } else {
+                  setCurrentUser(tempProfile);
+                }
+              } catch (insertCatchErr) {
+                console.error("loadInitialData: Išimtis bandant įrašyti profilį:", insertCatchErr);
+                setCurrentUser(tempProfile);
+              }
             }
             await loadMarketsAndLeaderboard(false, userId);
           };

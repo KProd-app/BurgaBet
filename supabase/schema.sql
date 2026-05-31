@@ -100,6 +100,10 @@ create policy "Visi vartotojai gali matyti profilius" on public.profiles
 create policy "Vartotojas gali atnaujinti tik savo profilio info" on public.profiles
     for update using (auth.uid() = id);
 
+create policy "Vartotojas gali susikurti savo profilį" on public.profiles
+    for insert with check (auth.uid() = id);
+
+
 -- Apsaugome token_balance ir is_admin nuo tiesioginio modifikavimo iš kliento
 create or replace function public.check_profile_updates()
 returns trigger as $$
@@ -117,6 +121,27 @@ $$ language plpgsql;
 create trigger tr_check_profile_updates
     before update on public.profiles
     for each row execute function public.check_profile_updates();
+
+-- Apsaugome profilio kūrimą iš kliento (neleidžiame priskirti neteisingo balanso ar admin teisių)
+create or replace function public.check_profile_inserts()
+returns trigger as $$
+begin
+    if current_user in ('authenticated', 'anon') then
+        NEW.token_balance := 1000.0;
+        if NEW.email = 'admin@burgabet.wtf' then
+            NEW.is_admin := true;
+        else
+            NEW.is_admin := false;
+        end if;
+    end if;
+    return NEW;
+end;
+$$ language plpgsql;
+
+create trigger tr_check_profile_inserts
+    before insert on public.profiles
+    for each row execute function public.check_profile_inserts();
+
 
 
 -- Kategorijos: visi gali matyti, tik adminai gali valdyti
@@ -480,6 +505,21 @@ $$ language plpgsql security definer;
 create or replace trigger on_auth_user_created
     after insert on auth.users
     for each row execute function public.handle_new_user();
+
+-- Užpildome profiles lentelę jau egzistuojančiais vartotojais iš auth.users (jei tokių yra po schemos perrašymo)
+-- Taip pat suteikiame admin teises vartotojui admin@burgabet.wtf
+insert into public.profiles (id, email, full_name, avatar_url, token_balance, is_admin)
+select 
+    id, 
+    email, 
+    coalesce(raw_user_meta_data->>'full_name', split_part(email, '@', 1)), 
+    raw_user_meta_data->>'avatar_url', 
+    1000.0, 
+    case when email = 'admin@burgabet.wtf' then true else false end
+from auth.users
+on conflict (id) do update set 
+    is_admin = case when excluded.email = 'admin@burgabet.wtf' then true else profiles.is_admin end;
+
 
 
 -- =========================================================================
