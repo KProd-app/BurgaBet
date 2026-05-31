@@ -421,33 +421,42 @@ export default function Dashboard() {
         
         if (session) {
           const userId = session.user.id;
-          console.log("loadInitialData: Užklausiamas profilis vartotojui:", userId);
-          const { data: profile, error: profileErr } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', userId)
-            .single();
+          
+          // Apjungiame visus Supabase krovimo veiksmus ir apribojame bendru laiko limitu (timeout)
+          const loadDataSteps = async () => {
+            console.log("loadInitialData: Užklausiamas profilis vartotojui:", userId);
+            const { data: profile, error: profileErr } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', userId)
+              .single();
 
-          if (profileErr) {
-            console.warn("loadInitialData: Nepavyko gauti profilio iš lentelės:", profileErr.message);
-          }
+            if (profileErr) {
+              console.warn("loadInitialData: Nepavyko gauti profilio iš lentelės:", profileErr.message);
+            }
 
-          if (profile) {
-            console.log("loadInitialData: Profilis sėkmingai rastas, nustatomas:", profile);
-            setCurrentUser(profile);
-          } else {
-            console.log("loadInitialData: Profilio lentelėje nėra įrašo. Naudojamas saugiklio profilis.");
-            // Saugiklis: jei vartotojas prisijungęs per Auth, bet profilio lentelėje dar nėra įrašo
-            setCurrentUser({
-              id: userId,
-              email: session.user.email || '',
-              full_name: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Vartotojas',
-              avatar_url: session.user.user_metadata?.avatar_url || null,
-              token_balance: 1000.0,
-              is_admin: false
-            });
-          }
-          await loadMarketsAndLeaderboard(false, userId);
+            if (profile) {
+              console.log("loadInitialData: Profilis sėkmingai rastas, nustatomas:", profile);
+              setCurrentUser(profile);
+            } else {
+              console.log("loadInitialData: Profilio lentelėje nėra įrašo. Naudojamas saugiklio profilis.");
+              setCurrentUser({
+                id: userId,
+                email: session.user.email || '',
+                full_name: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Vartotojas',
+                avatar_url: session.user.user_metadata?.avatar_url || null,
+                token_balance: 1000.0,
+                is_admin: false
+              });
+            }
+            await loadMarketsAndLeaderboard(false, userId);
+          };
+
+          const timeoutPromise = new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error("Duomenų krovimo iš Supabase laikas baigėsi (timeout)")), 10000)
+          );
+
+          await Promise.race([loadDataSteps(), timeoutPromise]);
         } else {
           setCurrentUser(null);
           await loadMarketsAndLeaderboard(false, null);
