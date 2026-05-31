@@ -189,39 +189,76 @@ export default function Dashboard() {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
     );
     setIsDemoMode(!hasKeys);
-    loadInitialData(!hasKeys);
+
+    let isMounted = true;
+
+    const init = async () => {
+      if (!hasKeys) {
+        await loadInitialData(true);
+      } else {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (isMounted) {
+            if (session) {
+              await loadInitialData(false);
+            } else {
+              setLoading(true);
+              await loadMarketsAndLeaderboard(false, null);
+              if (isMounted) setLoading(false);
+            }
+          }
+        } catch (e) {
+          console.error("Pradinio užkrovimo klaida:", e);
+          if (isMounted) {
+            setIsDemoMode(true);
+            await loadInitialData(true);
+          }
+        }
+      }
+    };
+
+    init();
+
+    let authSubscription: any = null;
+    let channel: any = null;
 
     if (hasKeys) {
       // 1. Sekame naudotojo prisijungimus
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        if (!isMounted) return;
+        if (event === 'SIGNED_IN') {
           await loadInitialData(false);
         } else if (event === 'SIGNED_OUT') {
           setCurrentUser(null);
           setPositions([]);
           setTransactions([]);
+          setLoading(true);
           await loadMarketsAndLeaderboard(false, null);
+          if (isMounted) setLoading(false);
         }
       });
+      authSubscription = subscription;
 
       // 2. Realtime prenumerata visoms lentelėms (tylusis fono atnaujinimas)
-      const channel = supabase
+      channel = supabase
         .channel('db-realtime-changes')
         .on(
           'postgres_changes',
           { event: '*', schema: 'public' },
           () => {
-            // Atsiradus bet kokiam pakeitimui DB, tyliai atnaujiname duomenis fone
-            loadMarketsAndLeaderboard(false, currentUserRef.current?.id || null);
+            if (isMounted) {
+              loadMarketsAndLeaderboard(false, currentUserRef.current?.id || null);
+            }
           }
         )
         .subscribe();
-
-      return () => {
-        subscription.unsubscribe();
-        supabase.removeChannel(channel);
-      };
     }
+
+    return () => {
+      isMounted = false;
+      if (authSubscription) authSubscription.unsubscribe();
+      if (channel) supabase.removeChannel(channel);
+    };
   }, []);
 
   // Tylus atnaujinimas (Be Loading ekranėlio)
@@ -280,99 +317,99 @@ export default function Dashboard() {
 
   const loadInitialData = async (demo: boolean) => {
     setLoading(true);
-    if (demo) {
-      let localProfiles: Profile[] = [];
-      let localCategories: Category[] = [];
-      let localMarkets: Market[] = [];
-      let localPositions: Position[] = [];
-      let localTransactions: Transaction[] = [];
+    try {
+      if (demo) {
+        let localProfiles: Profile[] = [];
+        let localCategories: Category[] = [];
+        let localMarkets: Market[] = [];
+        let localPositions: Position[] = [];
+        let localTransactions: Transaction[] = [];
 
-      try {
-        localProfiles = JSON.parse(localStorage.getItem('bb_profiles') || '[]');
-        localCategories = JSON.parse(localStorage.getItem('bb_categories') || '[]');
-        localMarkets = JSON.parse(localStorage.getItem('bb_markets') || '[]');
-        localPositions = JSON.parse(localStorage.getItem('bb_positions') || '[]');
-        localTransactions = JSON.parse(localStorage.getItem('bb_transactions') || '[]');
-      } catch (e) {
-        console.error("Klaida skaitant LocalStorage", e);
-      }
+        try {
+          localProfiles = JSON.parse(localStorage.getItem('bb_profiles') || '[]');
+          localCategories = JSON.parse(localStorage.getItem('bb_categories') || '[]');
+          localMarkets = JSON.parse(localStorage.getItem('bb_markets') || '[]');
+          localPositions = JSON.parse(localStorage.getItem('bb_positions') || '[]');
+          localTransactions = JSON.parse(localStorage.getItem('bb_transactions') || '[]');
+        } catch (e) {
+          console.error("Klaida skaitant LocalStorage", e);
+        }
 
-      if (localProfiles.length === 0) {
-        localProfiles = [
-          { id: 'u1', email: 'andrius@burgabet.lt', full_name: 'Andrius Gamyba', avatar_url: null, token_balance: 1000, is_admin: false },
-          { id: 'u2', email: 'ainius@burgabet.lt', full_name: 'Ainius Integracija', avatar_url: null, token_balance: 1250, is_admin: false },
-          { id: 'u3', email: 'einoras@burgabet.lt', full_name: 'Einoras Integracija', avatar_url: null, token_balance: 850, is_admin: false },
-          { id: 'u4', email: 'tomas@burgabet.lt', full_name: 'Tomas Fotografija', avatar_url: null, token_balance: 1100, is_admin: false },
-          { id: 'admin', email: 'admin@burgabet.lt', full_name: 'Tomas Admin (Vadyba)', avatar_url: null, token_balance: 9999, is_admin: true }
-        ];
-        localStorage.setItem('bb_profiles', JSON.stringify(localProfiles));
-      }
+        if (localProfiles.length === 0) {
+          localProfiles = [
+            { id: 'u1', email: 'andrius@burgabet.lt', full_name: 'Andrius Gamyba', avatar_url: null, token_balance: 1000, is_admin: false },
+            { id: 'u2', email: 'ainius@burgabet.lt', full_name: 'Ainius Integracija', avatar_url: null, token_balance: 1250, is_admin: false },
+            { id: 'u3', email: 'einoras@burgabet.lt', full_name: 'Einoras Integracija', avatar_url: null, token_balance: 850, is_admin: false },
+            { id: 'u4', email: 'tomas@burgabet.lt', full_name: 'Tomas Fotografija', avatar_url: null, token_balance: 1100, is_admin: false },
+            { id: 'admin', email: 'admin@burgabet.lt', full_name: 'Tomas Admin (Vadyba)', avatar_url: null, token_balance: 9999, is_admin: true }
+          ];
+          localStorage.setItem('bb_profiles', JSON.stringify(localProfiles));
+        }
 
-      let me = localProfiles.find(p => p.id === 'u1') || localProfiles[0];
-      setCurrentUser(me);
+        let me = localProfiles.find(p => p.id === 'u1') || localProfiles[0];
+        setCurrentUser(me);
 
-      if (localCategories.length === 0) {
-        localCategories = [
-          { id: 'c1', name: 'Gamyba', color: 'emerald', created_at: new Date().toISOString() },
-          { id: 'c2', name: 'Integracija', color: 'blue', created_at: new Date().toISOString() },
-          { id: 'c3', name: 'Fotografija', color: 'amber', created_at: new Date().toISOString() },
-          { id: 'c4', name: 'Biuras', color: 'violet', created_at: new Date().toISOString() }
-        ];
-        localStorage.setItem('bb_categories', JSON.stringify(localCategories));
-      }
+        if (localCategories.length === 0) {
+          localCategories = [
+            { id: 'c1', name: 'Gamyba', color: 'emerald', created_at: new Date().toISOString() },
+            { id: 'c2', name: 'Integracija', color: 'blue', created_at: new Date().toISOString() },
+            { id: 'c3', name: 'Fotografija', color: 'amber', created_at: new Date().toISOString() },
+            { id: 'c4', name: 'Biuras', color: 'violet', created_at: new Date().toISOString() }
+          ];
+          localStorage.setItem('bb_categories', JSON.stringify(localCategories));
+        }
 
-      if (localMarkets.length === 0) {
-        localMarkets = [
-          {
-            id: 'm1',
-            question: 'Ar Andrius pasieks gamybos normą šią savaitę?',
-            description: 'Vertinama pagal gamybos departamento kassavaitinę ataskaitą, teikiamą penktadienį iki 17:00.',
-            yes_reserves: 120,
-            no_reserves: 80,
-            status: 'active',
-            outcome: null,
-            category_id: 'c1',
-            created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-            resolved_at: null,
-            creator_id: 'admin'
-          },
-          {
-            id: 'm2',
-            question: 'Ar Ainius ir Einoras užbaigs integraciją iki penktadienio?',
-            description: 'Integracija laikoma užbaigta, kai kodas patvirtinamas ir sujungiamas į master šaką iki penktadienio 23:59.',
-            yes_reserves: 100,
-            no_reserves: 100,
-            status: 'active',
-            outcome: null,
-            category_id: 'c2',
-            created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-            resolved_at: null,
-            creator_id: 'admin'
-          },
-          {
-            id: 'm3',
-            question: 'Ar Tomas įkels naujas projekto nuotraukas į sistemą iki mėnesio galo?',
-            description: 'Reikia įkelti bent 5 kokybiškas naujo objekto nuotraukas į bendrą galeriją.',
-            yes_reserves: 90,
-            no_reserves: 110,
-            status: 'active',
-            outcome: null,
-            category_id: 'c3',
-            created_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-            resolved_at: null,
-            creator_id: 'admin'
-          }
-        ];
-        localStorage.setItem('bb_markets', JSON.stringify(localMarkets));
-      }
+        if (localMarkets.length === 0) {
+          localMarkets = [
+            {
+              id: 'm1',
+              question: 'Ar Andrius pasieks gamybos normą šią savaitę?',
+              description: 'Vertinama pagal gamybos departamento kassavaitinę ataskaitą, teikiamą penktadienį iki 17:00.',
+              yes_reserves: 120,
+              no_reserves: 80,
+              status: 'active',
+              outcome: null,
+              category_id: 'c1',
+              created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+              resolved_at: null,
+              creator_id: 'admin'
+            },
+            {
+              id: 'm2',
+              question: 'Ar Ainius ir Einoras užbaigs integraciją iki penktadienio?',
+              description: 'Integracija laikoma užbaigta, kai kodas patvirtinamas ir sujungiamas į master šaką iki penktadienio 23:59.',
+              yes_reserves: 100,
+              no_reserves: 100,
+              status: 'active',
+              outcome: null,
+              category_id: 'c2',
+              created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+              resolved_at: null,
+              creator_id: 'admin'
+            },
+            {
+              id: 'm3',
+              question: 'Ar Tomas įkels naujas projekto nuotraukas į sistemą iki mėnesio galo?',
+              description: 'Reikia įkelti bent 5 kokybiškas naujo objekto nuotraukas į bendrą galeriją.',
+              yes_reserves: 90,
+              no_reserves: 110,
+              status: 'active',
+              outcome: null,
+              category_id: 'c3',
+              created_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+              resolved_at: null,
+              creator_id: 'admin'
+            }
+          ];
+          localStorage.setItem('bb_markets', JSON.stringify(localMarkets));
+        }
 
-      setCategories(localCategories);
-      setMarkets(localMarkets);
-      setPositions(localPositions.filter(p => p.user_id === me.id));
-      setLeaderboard([...localProfiles].sort((a, b) => b.token_balance - a.token_balance));
-      setTransactions(localTransactions.filter(t => t.user_id === me.id));
-    } else {
-      try {
+        setCategories(localCategories);
+        setMarkets(localMarkets);
+        setPositions(localPositions.filter(p => p.user_id === me.id));
+        setLeaderboard([...localProfiles].sort((a, b) => b.token_balance - a.token_balance));
+        setTransactions(localTransactions.filter(t => t.user_id === me.id));
+      } else {
         const { data: { session } } = await supabase.auth.getSession();
         
         if (session) {
@@ -383,20 +420,40 @@ export default function Dashboard() {
             .eq('id', userId)
             .single();
 
-          if (profile) setCurrentUser(profile);
+          if (profile) {
+            setCurrentUser(profile);
+          } else {
+            // Saugiklis: jei vartotojas prisijungęs per Auth, bet profilio lentelėje dar nėra įrašo
+            setCurrentUser({
+              id: userId,
+              email: session.user.email || '',
+              full_name: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Vartotojas',
+              avatar_url: session.user.user_metadata?.avatar_url || null,
+              token_balance: 1000.0,
+              is_admin: false
+            });
+          }
           await loadMarketsAndLeaderboard(false, userId);
         } else {
           setCurrentUser(null);
           await loadMarketsAndLeaderboard(false, null);
         }
-      } catch (err) {
-        console.error("Supabase užklausos klaida, perjungiamas Demo režimas:", err);
-        setIsDemoMode(true);
-        loadInitialData(true);
-        return;
       }
+    } catch (err) {
+      console.error("Supabase užklausos klaida, perjungiamas saugus vietinis režimas:", err);
+      // Nenaudojame rekursijos, tiesiog nuskaitome vietinius duomenis
+      setIsDemoMode(true);
+      try {
+        const localCats = JSON.parse(localStorage.getItem('bb_categories') || '[]');
+        const localMarkets = JSON.parse(localStorage.getItem('bb_markets') || '[]');
+        setCategories(localCats);
+        setMarkets(localMarkets);
+      } catch (e) {
+        console.error("Klaida nuskaitant atsargines kategorijas iš LocalStorage:", e);
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
