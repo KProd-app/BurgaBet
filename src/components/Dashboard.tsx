@@ -262,6 +262,13 @@ export default function Dashboard() {
     };
   }, []);
 
+  // Automatiškai uždaryti prisijungimo modalą, kai vartotojas sėkmingai prisijungia (pvz., po puslapio perkrovimo atstačius sesiją)
+  useEffect(() => {
+    if (currentUser) {
+      setIsAuthModalOpen(false);
+    }
+  }, [currentUser]);
+
   // Tylus atnaujinimas (Be Loading ekranėlio)
   const loadMarketsAndLeaderboard = async (demo: boolean, userId: string | null) => {
     if (demo) return;
@@ -454,7 +461,7 @@ export default function Dashboard() {
           };
 
           const timeoutPromise = new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error("Duomenų krovimo iš Supabase laikas baigėsi (timeout)")), 10000)
+            setTimeout(() => reject(new Error("Duomenų krovimo iš Supabase laikas baigėsi (timeout)")), 25000)
           );
 
           await Promise.race([loadDataSteps(), timeoutPromise]);
