@@ -49,6 +49,7 @@ interface Market {
   description: string | null;
   yes_reserves: number;
   no_reserves: number;
+  token_pool: number;
   status: 'active' | 'resolved' | 'cancelled';
   outcome: 'YES' | 'NO' | null;
   category_id: string | null;
@@ -145,7 +146,8 @@ export default function Dashboard() {
   const [newQuestion, setNewQuestion] = useState<string>('');
   const [newDescription, setNewDescription] = useState<string>('');
   const [newCategorySelection, setNewCategorySelection] = useState<string>('none');
-  const [newLiquidity, setNewLiquidity] = useState<string>('100');
+  const [newLiquidity, setNewLiquidity] = useState<number>(100);
+  const [newInitialProb, setNewInitialProb] = useState<number>(50);
   const [adminMessage, setAdminMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
   // Nauja kategorija
@@ -392,6 +394,7 @@ export default function Dashboard() {
               description: 'Vertinama pagal gamybos departamento kassavaitinę ataskaitą, teikiamą penktadienį iki 17:00.',
               yes_reserves: 120,
               no_reserves: 80,
+              token_pool: 0,
               status: 'active',
               outcome: null,
               category_id: 'c1',
@@ -405,6 +408,7 @@ export default function Dashboard() {
               description: 'Integracija laikoma užbaigta, kai kodas patvirtinamas ir sujungiamas į master šaką iki penktadienio 23:59.',
               yes_reserves: 100,
               no_reserves: 100,
+              token_pool: 0,
               status: 'active',
               outcome: null,
               category_id: 'c2',
@@ -418,6 +422,7 @@ export default function Dashboard() {
               description: 'Reikia įkelti bent 5 kokybiškas naujo objekto nuotraukas į bendrą galeriją.',
               yes_reserves: 90,
               no_reserves: 110,
+              token_pool: 0,
               status: 'active',
               outcome: null,
               category_id: 'c3',
@@ -677,6 +682,7 @@ export default function Dashboard() {
 
         market.yes_reserves = newReserves.yesReserves;
         market.no_reserves = newReserves.noReserves;
+        market.token_pool = (market.token_pool || 0) + amount;
         user.token_balance -= amount;
 
         let posIdx = localPositions.findIndex(p => p.user_id === user.id && p.market_id === market.id);
@@ -797,6 +803,7 @@ export default function Dashboard() {
           position.no_shares -= S;
         }
 
+        market.token_pool = Math.max(0, (market.token_pool || 0) - refundTokens);
         user.token_balance += refundTokens;
 
         localTransactions.push({
@@ -855,9 +862,7 @@ export default function Dashboard() {
       setAdminMessage({ type: 'error', text: 'Klausimas negali būti tuščias.' });
       return;
     }
-
-    const liquidity = parseFloat(newLiquidity);
-    if (isNaN(liquidity) || liquidity < 10) {
+    if (newLiquidity < 10) {
       setAdminMessage({ type: 'error', text: 'Likvidumas turi būti bent 10 kontraktų.' });
       return;
     }
@@ -865,6 +870,7 @@ export default function Dashboard() {
     setAdminMessage(null);
 
     const categoryId = newCategorySelection === 'none' ? null : newCategorySelection;
+    const { yesReserves, noReserves } = AMM.getInitialReservesFromProb(newLiquidity, newInitialProb);
 
     if (isDemoMode) {
       const localMarkets: Market[] = JSON.parse(localStorage.getItem('bb_markets') || '[]');
@@ -872,8 +878,9 @@ export default function Dashboard() {
         id: 'm_' + Date.now(),
         question: newQuestion,
         description: newDescription || null,
-        yes_reserves: liquidity,
-        no_reserves: liquidity,
+        yes_reserves: yesReserves,
+        no_reserves: noReserves,
+        token_pool: 0,
         status: 'active',
         outcome: null,
         category_id: categoryId,
@@ -888,14 +895,15 @@ export default function Dashboard() {
 
       setNewQuestion('');
       setNewDescription('');
-      setAdminMessage({ type: 'success', text: 'Nauja spėjimų rinka sukurta!' });
+      setAdminMessage({ type: 'success', text: `Rinka sukurta! Pradinė tikimybė YES: ${newInitialProb}%` });
     } else {
       try {
         const { error } = await supabase.from('markets').insert({
           question: newQuestion,
           description: newDescription || null,
-          yes_reserves: liquidity,
-          no_reserves: liquidity,
+          yes_reserves: yesReserves,
+          no_reserves: noReserves,
+          token_pool: 0,
           category_id: categoryId,
           creator_id: currentUser?.id
         });
@@ -904,7 +912,7 @@ export default function Dashboard() {
 
         setNewQuestion('');
         setNewDescription('');
-        setAdminMessage({ type: 'success', text: 'Rinka sėkmingai sukurta Supabase!' });
+        setAdminMessage({ type: 'success', text: `Rinka sukurta Supabase! YES: ${newInitialProb}%` });
         await loadMarketsAndLeaderboard(false, currentUser?.id || null);
       } catch (err: any) {
         setAdminMessage({ type: 'error', text: err.message || 'Klaida kuriant rinką Supabase.' });
@@ -1168,26 +1176,30 @@ export default function Dashboard() {
       market.outcome = winningOutcome;
       market.resolved_at = new Date().toISOString();
 
-      localPositions.forEach(pos => {
-        if (pos.market_id === marketId) {
-          const shares = winningOutcome === 'YES' ? pos.yes_shares : pos.no_shares;
-          if (shares > 0) {
-            const payout = shares * 100;
-            const profile = localProfiles.find(p => p.id === pos.user_id);
-            if (profile) {
-              profile.token_balance += payout;
-              
-              localTransactions.push({
-                id: 'tx_pay_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
-                user_id: pos.user_id,
-                market_id: marketId,
-                type: 'payout',
-                token_amount: -payout,
-                share_amount: shares,
-                price_per_share: 100,
-                created_at: new Date().toISOString()
-              });
-            }
+      const tokenPool = market.token_pool || 0;
+      const allMarketPositions = localPositions.filter(p => p.market_id === marketId);
+      const totalWinningShares = allMarketPositions.reduce((sum, pos) => {
+        return sum + (winningOutcome === 'YES' ? pos.yes_shares : pos.no_shares);
+      }, 0);
+      const payoutPerShare = totalWinningShares > 0 && tokenPool > 0 ? tokenPool / totalWinningShares : 0;
+
+      allMarketPositions.forEach(pos => {
+        const shares = winningOutcome === 'YES' ? pos.yes_shares : pos.no_shares;
+        if (shares > 0 && payoutPerShare > 0) {
+          const payout = shares * payoutPerShare;
+          const profile = localProfiles.find(p => p.id === pos.user_id);
+          if (profile) {
+            profile.token_balance += payout;
+            localTransactions.push({
+              id: 'tx_pay_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
+              user_id: pos.user_id,
+              market_id: marketId,
+              type: 'payout',
+              token_amount: payout,
+              share_amount: shares,
+              price_per_share: payoutPerShare,
+              created_at: new Date().toISOString()
+            });
           }
         }
       });
@@ -1701,9 +1713,16 @@ export default function Dashboard() {
                           {estimatedSlippage}%
                         </span>
                       </div>
-                      <div className="border-t border-zinc-800/80 pt-2.5 flex justify-between font-bold text-sm">
-                        <span className="text-zinc-300">Išmoka teisingo spėjimo atveju:</span>
-                        <span className="text-emerald-400">{(estimatedShares * 100).toFixed(0)} žetonų</span>
+                      <div className="border-t border-zinc-800/80 pt-2.5 space-y-1.5">
+                        <div className="flex justify-between font-bold text-sm">
+                          <span className="text-zinc-300">Akcijų kiekis:</span>
+                          <span className="text-emerald-400">{estimatedShares.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-xs text-zinc-500">
+                          <span>Bendras fondas dabar:</span>
+                          <span>{((selectedMarket?.token_pool || 0) + betAmountNum).toFixed(0)} žetonų</span>
+                        </div>
+                        <p className="text-[10px] text-zinc-600 pt-0.5">Galutinė išmoka priklauso nuo fondo dydžio uždarymo metu.</p>
                       </div>
                     </div>
 
@@ -1781,7 +1800,7 @@ export default function Dashboard() {
                     const shares = pos.yes_shares > 0 ? pos.yes_shares : pos.no_shares;
                     const spotPrice = AMM.getSpotPrice(market.yes_reserves, market.no_reserves, type);
                     const currentVal = calculatePositionValue(pos, market);
-                    const potentialPayout = shares * 100;
+                    const tokenPool = market.token_pool || 0;
 
                     return (
                       <div key={pos.id} className="p-5 rounded-2xl bg-zinc-900/50 border border-zinc-800 flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -1802,7 +1821,7 @@ export default function Dashboard() {
                           <div className="text-right">
                             <span className="text-xs text-zinc-400 block">Dabartinė vertė</span>
                             <span className="font-bold text-emerald-400 text-lg">{currentVal.toFixed(1)} žet.</span>
-                            <span className="text-[10px] text-zinc-500 block">Potenciali išmoka: {potentialPayout.toFixed(0)}</span>
+                            <span className="text-[10px] text-zinc-500 block">Fondas: {tokenPool.toFixed(0)} žet.</span>
                           </div>
 
                           {market.status === 'active' && (
@@ -1938,78 +1957,112 @@ export default function Dashboard() {
 
         {/* TAB 3: ADMIN PANEL */}
         {activeTab === 'admin' && currentUser?.is_admin && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            
-            {/* RESOLUTION ACTIONS */}
-            <div className="lg:col-span-2 space-y-6">
-              
-              {/* Markets Resolution Section */}
-              <div className="space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
+
+            {/* LEFT: MARKET LIST + CATEGORY LIST */}
+            <div className="lg:col-span-3 space-y-8">
+
+              {/* ACTIVE MARKETS */}
+              <div className="space-y-3">
                 <h2 className="text-xl font-bold flex items-center gap-2 text-white">
                   <ShieldAlert className="w-5 h-5 text-rose-500" />
-                  Prognozių rinkų uždarymas (Išmokos)
+                  Aktyvios rinkos
+                  <span className="text-xs font-normal text-zinc-500 bg-zinc-900 px-2 py-0.5 rounded-full">
+                    {markets.filter(m => m.status === 'active').length} aktyvios
+                  </span>
                 </h2>
+
+                {markets.filter(m => m.status === 'active').length === 0 && (
+                  <div className="p-10 text-center rounded-2xl bg-zinc-900/30 border border-zinc-800 text-zinc-500 text-sm">
+                    Nėra aktyvių rinkų. Sukurkite naują dešinėje.
+                  </div>
+                )}
 
                 {markets.filter(m => m.status === 'active').map(market => {
                   const marketCat = categories.find(c => c.id === market.category_id);
+                  const priceYes = AMM.getSpotPrice(market.yes_reserves, market.no_reserves, 'YES');
+                  const priceNo = AMM.getSpotPrice(market.yes_reserves, market.no_reserves, 'NO');
+                  const pool = market.token_pool || 0;
+
                   return (
-                    <div key={market.id} className="p-5 rounded-2xl bg-zinc-900/50 border border-zinc-800 flex flex-col md:flex-row md:items-center justify-between gap-6">
-                      <div className="max-w-[65%] space-y-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h3 className="font-bold text-white text-base leading-snug">{market.question}</h3>
-                          {marketCat && (
-                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${getCategoryColorClasses(marketCat.color)}`}>
-                              {marketCat.name}
-                            </span>
+                    <div key={market.id} className="p-5 rounded-2xl bg-zinc-900/60 border border-zinc-800 space-y-4">
+                      {/* Top row: question + cat */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {marketCat && (
+                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${getCategoryColorClasses(marketCat.color)}`}>
+                                {marketCat.name}
+                              </span>
+                            )}
+                            {pool === 0 && (
+                              <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                Nėra statymų
+                              </span>
+                            )}
+                          </div>
+                          <h3 className="font-bold text-white text-sm leading-snug">{market.question}</h3>
+                          {market.description && (
+                            <p className="text-[11px] text-zinc-500 leading-relaxed line-clamp-2">{market.description}</p>
                           )}
                         </div>
-                        <p className="text-xs text-zinc-400">{market.description}</p>
-                        <div className="flex gap-3 text-[10px] text-zinc-500">
-                          <span>YES rezervas: {market.yes_reserves.toFixed(1)}</span>
-                          <span>NO rezervas: {market.no_reserves.toFixed(1)}</span>
+                        <div className="flex gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingMarket(market);
+                              setEditMarketQuestion(market.question);
+                              setEditMarketDescription(market.description || '');
+                              setEditMarketCategoryId(market.category_id || 'none');
+                              setIsEditMarketModalOpen(true);
+                            }}
+                            className="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white rounded-lg transition-colors border border-zinc-700"
+                            title="Redaguoti"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteMarket(market.id)}
+                            className="p-2 bg-zinc-800 hover:bg-rose-950 text-zinc-400 hover:text-rose-400 rounded-lg transition-colors border border-zinc-700 hover:border-rose-900"
+                            title="Trinti"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0 flex-wrap md:flex-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingMarket(market);
-                            setEditMarketQuestion(market.question);
-                            setEditMarketDescription(market.description || '');
-                            setEditMarketCategoryId(market.category_id || 'none');
-                            setIsEditMarketModalOpen(true);
-                          }}
-                          className="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-bold rounded-lg transition-colors border border-zinc-700 flex items-center gap-1"
-                          title="Redaguoti prognozę"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
+                      {/* Stats row */}
+                      <div className="grid grid-cols-3 gap-2 text-xs">
+                        <div className="bg-emerald-950/30 border border-emerald-900/40 rounded-xl p-2.5 text-center">
+                          <div className="text-emerald-400 font-bold text-base">{priceYes.toFixed(0)}%</div>
+                          <div className="text-zinc-500 text-[10px]">YES tikimybė</div>
+                        </div>
+                        <div className="bg-rose-950/30 border border-rose-900/40 rounded-xl p-2.5 text-center">
+                          <div className="text-rose-400 font-bold text-base">{priceNo.toFixed(0)}%</div>
+                          <div className="text-zinc-500 text-[10px]">NO tikimybė</div>
+                        </div>
+                        <div className="bg-zinc-800/50 border border-zinc-700/40 rounded-xl p-2.5 text-center">
+                          <div className="text-white font-bold text-base">{pool.toFixed(0)}</div>
+                          <div className="text-zinc-500 text-[10px]">Žetonų fondas</div>
+                        </div>
+                      </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteMarket(market.id)}
-                          className="p-2 bg-zinc-800 hover:bg-rose-950 text-zinc-400 hover:text-rose-400 text-xs font-bold rounded-lg transition-colors border border-zinc-700 hover:border-rose-900 flex items-center gap-1"
-                          title="Trinti prognozę"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                        
-                        <div className="w-px h-6 bg-zinc-800 mx-1 hidden md:block"></div>
-
+                      {/* Resolve row */}
+                      <div className="flex items-center gap-2 pt-1 border-t border-zinc-800">
+                        <span className="text-xs text-zinc-500 font-semibold mr-auto">Uždaryti rinką:</span>
                         <button
                           type="button"
                           onClick={() => handleResolveMarket(market.id, 'YES')}
-                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-lg shadow-emerald-900/20"
                         >
-                          <CheckCircle2 className="w-3 h-3" />
+                          <CheckCircle2 className="w-3.5 h-3.5" />
                           YES laimėjo
                         </button>
-                        
                         <button
                           type="button"
                           onClick={() => handleResolveMarket(market.id, 'NO')}
-                          className="px-3 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
+                          className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-lg shadow-rose-900/20"
                         >
                           <XCircle className="w-3.5 h-3.5" />
                           NO laimėjo
@@ -2018,28 +2071,21 @@ export default function Dashboard() {
                     </div>
                   );
                 })}
-
-                {markets.filter(m => m.status === 'active').length === 0 && (
-                  <div className="p-12 text-center rounded-2xl bg-zinc-900/30 border border-zinc-800 text-zinc-500">
-                    Nėra aktyvių rinkų, kurias reikėtų uždaryti.
-                  </div>
-                )}
               </div>
 
-              {/* Category Management Section */}
-              <div className="pt-6 border-t border-zinc-800 space-y-4">
+              {/* CATEGORIES */}
+              <div className="pt-4 border-t border-zinc-800 space-y-4">
                 <h2 className="text-xl font-bold flex items-center gap-2 text-white">
                   <Tag className="w-5 h-5 text-emerald-500" />
-                  Kategorijų valdymas
+                  Kategorijos
                 </h2>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   {categories.map((cat) => (
-                    <div key={cat.id} className="p-4 rounded-xl bg-zinc-900/30 border border-zinc-850 flex items-center justify-between">
-                      <span className={`text-xs font-bold px-3 py-1 rounded-lg ${getCategoryColorClasses(cat.color)}`}>
+                    <div key={cat.id} className="p-3 rounded-xl bg-zinc-900/40 border border-zinc-800 flex items-center justify-between gap-2">
+                      <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${getCategoryColorClasses(cat.color)}`}>
                         {cat.name}
                       </span>
-                      <div className="flex gap-1">
+                      <div className="flex gap-0.5">
                         <button
                           onClick={() => {
                             setEditingCategory(cat);
@@ -2047,40 +2093,39 @@ export default function Dashboard() {
                             setEditCategoryColor(cat.color);
                             setIsEditCategoryModalOpen(true);
                           }}
-                          className="p-2 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-900 rounded-lg transition-colors"
-                          title="Redaguoti kategoriją"
+                          className="p-1.5 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800 rounded-lg transition-colors"
                         >
-                          <Edit3 className="w-4 h-4" />
+                          <Edit3 className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => handleDeleteCategory(cat.id)}
-                          className="p-2 text-zinc-500 hover:text-rose-400 hover:bg-zinc-900 rounded-lg transition-colors"
-                          title="Ištrinti kategoriją"
+                          className="p-1.5 text-zinc-500 hover:text-rose-400 hover:bg-zinc-800 rounded-lg transition-colors"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>
                   ))}
                   {categories.length === 0 && (
-                    <p className="text-xs text-zinc-500 col-span-2">Nėra sukurtų kategorijų.</p>
+                    <p className="text-xs text-zinc-500 col-span-3">Nėra sukurtų kategorijų.</p>
                   )}
                 </div>
               </div>
-
             </div>
 
-            {/* RIGHT COLUMN ADMIN PANEL FORMS */}
-            <div className="lg:col-span-1 space-y-6">
-              
-              {/* Form 1: Create Market */}
-              <div className="p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-xl">
-                <h2 className="text-lg font-bold flex items-center gap-2 border-b border-zinc-800 pb-3 mb-4 text-white">
+            {/* RIGHT: CREATION FORMS */}
+            <div className="lg:col-span-2 space-y-6">
+
+              {/* FORM: CREATE MARKET */}
+              <div className="p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-xl space-y-5">
+                <h2 className="text-lg font-bold flex items-center gap-2 border-b border-zinc-800 pb-3 text-white">
                   <PlusCircle className="w-4 h-4 text-emerald-500" />
                   Sukurti naują rinką
                 </h2>
 
-                <form onSubmit={handleCreateMarket} className="space-y-4">
+                <form onSubmit={handleCreateMarket} className="space-y-5">
+
+                  {/* Question */}
                   <div>
                     <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Prognozės klausimas *</label>
                     <input
@@ -2089,47 +2134,187 @@ export default function Dashboard() {
                       value={newQuestion}
                       onChange={(e) => setNewQuestion(e.target.value)}
                       placeholder="Pvz.: Ar užbaigsime ketvirčio tikslus?"
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2 px-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
                     />
                   </div>
 
+                  {/* Description */}
                   <div>
-                    <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Kategorija</label>
-                    <select
-                      value={newCategorySelection}
-                      onChange={(e) => setNewCategorySelection(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2 px-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
-                    >
-                      <option value="none">Be kategorijos</option>
-                      {categories.map((cat) => (
-                        <option key={cat.id} value={cat.id}>{cat.name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Aprašymas / Taisyklės</label>
+                    <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Aprašymas / Rezoliucijos taisyklės</label>
                     <textarea
                       value={newDescription}
                       onChange={(e) => setNewDescription(e.target.value)}
-                      placeholder="Pateikite taisykles, kaip rinka bus išspręsta..."
-                      rows={3}
+                      placeholder="Kada rinka bus laikoma laimėta? Kokiais kriterijais?"
+                      rows={2}
                       className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2 px-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors resize-none"
                     />
                   </div>
 
+                  {/* Category visual picker */}
                   <div>
-                    <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Pradinis likvidumas (kontraktai) *</label>
-                    <input
-                      type="number"
-                      required
-                      value={newLiquidity}
-                      onChange={(e) => setNewLiquidity(e.target.value)}
-                      placeholder="100"
-                      min="10"
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2 px-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
-                    />
+                    <label className="text-xs text-zinc-400 font-semibold block mb-2">Kategorija</label>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setNewCategorySelection('none')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
+                          newCategorySelection === 'none'
+                            ? 'bg-zinc-600 text-white border-zinc-500'
+                            : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:border-zinc-600'
+                        }`}
+                      >
+                        Be kategorijos
+                      </button>
+                      {categories.map((cat) => (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          onClick={() => setNewCategorySelection(cat.id)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                            newCategorySelection === cat.id
+                              ? getCategoryButtonActiveClasses(cat.color)
+                              : getCategoryColorClasses(cat.color) + ' hover:opacity-80'
+                          }`}
+                        >
+                          {cat.name}
+                        </button>
+                      ))}
+                    </div>
                   </div>
+
+                  {/* Probability slider */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs text-zinc-400 font-semibold">Pradinė tikimybė</label>
+                      <span className="text-xs text-zinc-500">
+                        <span className="text-emerald-400 font-bold">{newInitialProb}% YES</span>
+                        {' / '}
+                        <span className="text-rose-400 font-bold">{100 - newInitialProb}% NO</span>
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="5"
+                      max="95"
+                      step="5"
+                      value={newInitialProb}
+                      onChange={(e) => setNewInitialProb(Number(e.target.value))}
+                      className="w-full accent-emerald-500 cursor-pointer"
+                    />
+                    {/* Visual probability bar */}
+                    <div className="flex rounded-lg overflow-hidden h-6 mt-2 text-[10px] font-bold">
+                      <div
+                        className="bg-emerald-600 flex items-center justify-center text-white transition-all duration-200"
+                        style={{ width: `${newInitialProb}%` }}
+                      >
+                        {newInitialProb >= 20 ? `YES ${newInitialProb}%` : ''}
+                      </div>
+                      <div
+                        className="bg-rose-600 flex items-center justify-center text-white transition-all duration-200"
+                        style={{ width: `${100 - newInitialProb}%` }}
+                      >
+                        {(100 - newInitialProb) >= 20 ? `NO ${100 - newInitialProb}%` : ''}
+                      </div>
+                    </div>
+                    {/* Quick prob presets */}
+                    <div className="flex gap-1.5 mt-2 flex-wrap">
+                      {[
+                        { label: '20% YES', val: 20 },
+                        { label: '35% YES', val: 35 },
+                        { label: '50/50', val: 50 },
+                        { label: '65% YES', val: 65 },
+                        { label: '80% YES', val: 80 },
+                      ].map(preset => (
+                        <button
+                          key={preset.val}
+                          type="button"
+                          onClick={() => setNewInitialProb(preset.val)}
+                          className={`text-[10px] font-bold px-2 py-1 rounded-md transition-colors ${
+                            newInitialProb === preset.val
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Liquidity presets */}
+                  <div>
+                    <label className="text-xs text-zinc-400 font-semibold block mb-2">Pradinis likvidumas</label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {[
+                        { label: 'Žemas', val: 50, desc: '50' },
+                        { label: 'Vidutinis', val: 100, desc: '100' },
+                        { label: 'Aukštas', val: 250, desc: '250' },
+                        { label: 'Labai aukštas', val: 500, desc: '500' },
+                      ].map(preset => (
+                        <button
+                          key={preset.val}
+                          type="button"
+                          onClick={() => setNewLiquidity(preset.val)}
+                          className={`py-2.5 px-1 rounded-xl text-center transition-all border ${
+                            newLiquidity === preset.val
+                              ? 'bg-emerald-600 text-white border-emerald-500 shadow-md'
+                              : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:border-zinc-600 hover:text-white'
+                          }`}
+                        >
+                          <div className="text-xs font-bold">{preset.desc}</div>
+                          <div className="text-[9px] opacity-70 mt-0.5">{preset.label}</div>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-2">
+                      <input
+                        type="number"
+                        value={newLiquidity}
+                        onChange={(e) => setNewLiquidity(Number(e.target.value))}
+                        min="10"
+                        placeholder="Arba įveskite tikslią reikšmę..."
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2 px-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Live preview */}
+                  {newQuestion.trim() && (
+                    <div className="border border-zinc-700 rounded-2xl overflow-hidden">
+                      <div className="px-3 py-1.5 bg-zinc-800/60 text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
+                        Peržiūra
+                      </div>
+                      <div className="p-4 bg-zinc-900/80 space-y-3">
+                        <div className="flex gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded">
+                            Live AMM
+                          </span>
+                          {newCategorySelection !== 'none' && (() => {
+                            const cat = categories.find(c => c.id === newCategorySelection);
+                            return cat ? (
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${getCategoryColorClasses(cat.color)}`}>
+                                {cat.name}
+                              </span>
+                            ) : null;
+                          })()}
+                        </div>
+                        <p className="text-sm font-bold text-white leading-snug">{newQuestion}</p>
+                        {newDescription && (
+                          <p className="text-xs text-zinc-400 line-clamp-2">{newDescription}</p>
+                        )}
+                        <div className="flex gap-2 pt-1">
+                          <div className="flex-1 flex items-center justify-between p-2 rounded-xl bg-emerald-950/20 border border-emerald-900/50 text-emerald-400">
+                            <span className="font-semibold text-xs">YES</span>
+                            <span className="font-bold">{newInitialProb}%</span>
+                          </div>
+                          <div className="flex-1 flex items-center justify-between p-2 rounded-xl bg-rose-950/20 border border-rose-900/50 text-rose-400">
+                            <span className="font-semibold text-xs">NO</span>
+                            <span className="font-bold">{100 - newInitialProb}%</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {adminMessage && (
                     <div className={`p-2.5 rounded-xl text-xs flex gap-2 ${
@@ -2142,48 +2327,70 @@ export default function Dashboard() {
 
                   <button
                     type="submit"
-                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm transition-colors shadow-lg"
+                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm transition-colors shadow-lg"
                   >
                     Sukurti spėjimą
                   </button>
                 </form>
               </div>
 
-              {/* Form 2: Create Category */}
-              <div className="p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-xl">
-                <h2 className="text-lg font-bold flex items-center gap-2 border-b border-zinc-800 pb-3 mb-4 text-white">
+              {/* FORM: CREATE CATEGORY */}
+              <div className="p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-xl space-y-4">
+                <h2 className="text-lg font-bold flex items-center gap-2 border-b border-zinc-800 pb-3 text-white">
                   <Tag className="w-4 h-4 text-emerald-500" />
-                  Pridėti naują kategoriją
+                  Nauja kategorija
                 </h2>
 
                 <form onSubmit={handleCreateCategory} className="space-y-4">
                   <div>
-                    <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Kategorijos pavadinimas *</label>
+                    <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Pavadinimas *</label>
                     <input
                       type="text"
                       required
                       value={newCategoryName}
                       onChange={(e) => setNewCategoryName(e.target.value)}
                       placeholder="Pvz.: Biuras, Rinkodara..."
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2 px-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
                     />
                   </div>
 
+                  {/* Visual color picker */}
                   <div>
-                    <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Kortelės spalva *</label>
-                    <select
-                      value={newCategoryColor}
-                      onChange={(e) => setNewCategoryColor(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2 px-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
-                    >
-                      <option value="emerald">Emerald (Žalia)</option>
-                      <option value="blue">Blue (Mėlyna)</option>
-                      <option value="amber">Amber (Geltona)</option>
-                      <option value="violet">Violet (Violetinė)</option>
-                      <option value="rose">Rose (Raudona)</option>
-                      <option value="indigo">Indigo (Tamsiai mėlyna)</option>
-                      <option value="cyan">Cyan (Šviesiai mėlyna)</option>
-                    </select>
+                    <label className="text-xs text-zinc-400 font-semibold block mb-2">Spalva</label>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { val: 'emerald', label: 'Žalia' },
+                        { val: 'blue', label: 'Mėlyna' },
+                        { val: 'amber', label: 'Geltona' },
+                        { val: 'violet', label: 'Violetinė' },
+                        { val: 'rose', label: 'Raudona' },
+                        { val: 'indigo', label: 'Indigo' },
+                        { val: 'cyan', label: 'Žydra' },
+                      ].map(opt => (
+                        <button
+                          key={opt.val}
+                          type="button"
+                          onClick={() => setNewCategoryColor(opt.val)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ring-2 ${
+                            newCategoryColor === opt.val
+                              ? getCategoryButtonActiveClasses(opt.val) + ' ring-white/30'
+                              : getCategoryColorClasses(opt.val) + ' ring-transparent hover:ring-white/10'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Badge preview */}
+                    {newCategoryName.trim() && (
+                      <div className="mt-3 flex items-center gap-2">
+                        <span className="text-[10px] text-zinc-500">Peržiūra:</span>
+                        <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${getCategoryColorClasses(newCategoryColor)}`}>
+                          {newCategoryName}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {catMessage && (
@@ -2197,7 +2404,7 @@ export default function Dashboard() {
 
                   <button
                     type="submit"
-                    className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 text-white rounded-xl font-bold text-sm transition-colors"
+                    className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-white rounded-xl font-bold text-sm transition-colors"
                   >
                     Sukurti kategoriją
                   </button>
@@ -2205,7 +2412,6 @@ export default function Dashboard() {
               </div>
 
             </div>
-
           </div>
         )}
 
@@ -2382,20 +2588,39 @@ export default function Dashboard() {
               </div>
 
               <div>
-                <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Kortelės spalva *</label>
-                <select
-                  value={editCategoryColor}
-                  onChange={(e) => setEditCategoryColor(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-4 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
-                >
-                  <option value="emerald">Emerald (Žalia)</option>
-                  <option value="blue">Blue (Mėlyna)</option>
-                  <option value="amber">Amber (Geltona)</option>
-                  <option value="violet">Violet (Violetinė)</option>
-                  <option value="rose">Rose (Raudona)</option>
-                  <option value="indigo">Indigo (Tamsiai mėlyna)</option>
-                  <option value="cyan">Cyan (Šviesiai mėlyna)</option>
-                </select>
+                <label className="text-xs text-zinc-400 font-semibold block mb-2">Kortelės spalva *</label>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { val: 'emerald', label: 'Žalia' },
+                    { val: 'blue', label: 'Mėlyna' },
+                    { val: 'amber', label: 'Geltona' },
+                    { val: 'violet', label: 'Violetinė' },
+                    { val: 'rose', label: 'Raudona' },
+                    { val: 'indigo', label: 'Indigo' },
+                    { val: 'cyan', label: 'Žydra' },
+                  ].map(opt => (
+                    <button
+                      key={opt.val}
+                      type="button"
+                      onClick={() => setEditCategoryColor(opt.val)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ring-2 ${
+                        editCategoryColor === opt.val
+                          ? getCategoryButtonActiveClasses(opt.val) + ' ring-white/30'
+                          : getCategoryColorClasses(opt.val) + ' ring-transparent hover:ring-white/10'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                {editCategoryName.trim() && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-[10px] text-zinc-500">Peržiūra:</span>
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${getCategoryColorClasses(editCategoryColor)}`}>
+                      {editCategoryName}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {editCatMessage && (

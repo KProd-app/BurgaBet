@@ -48,6 +48,7 @@ create table public.markets (
     description text,
     yes_reserves numeric not null default 100.0 check (yes_reserves > 0),
     no_reserves numeric not null default 100.0 check (no_reserves > 0),
+    token_pool numeric not null default 0.0 check (token_pool >= 0),
     status text not null default 'active' check (status in ('active', 'resolved', 'cancelled')),
     outcome text check (outcome in ('YES', 'NO', null)),
     category_id uuid references public.categories(id) on delete set null,
@@ -256,8 +257,8 @@ begin
     set token_balance = token_balance - p_bet_amount 
     where id = v_user_id;
 
-    update markets 
-    set yes_reserves = v_new_yes, no_reserves = v_new_no 
+    update markets
+    set yes_reserves = v_new_yes, no_reserves = v_new_no, token_pool = token_pool + p_bet_amount
     where id = p_market_id;
 
     insert into positions (user_id, market_id, yes_shares, no_shares, updated_at)
@@ -380,12 +381,12 @@ begin
 
     v_avg_price := v_refund_tokens / p_shares_to_sell;
 
-    update profiles 
-    set token_balance = token_balance + v_refund_tokens 
+    update profiles
+    set token_balance = token_balance + v_refund_tokens
     where id = v_user_id;
 
-    update markets 
-    set yes_reserves = v_new_yes, no_reserves = v_new_no 
+    update markets
+    set yes_reserves = v_new_yes, no_reserves = v_new_no, token_pool = greatest(0, token_pool - v_refund_tokens)
     where id = p_market_id;
 
     update positions 
@@ -424,7 +425,11 @@ declare
     v_user_id uuid;
     v_is_admin boolean;
     v_status text;
+    v_token_pool numeric;
+    v_total_winning_shares numeric;
+    v_payout_per_share numeric;
     v_pos record;
+    v_winning_shares numeric;
     v_payout numeric;
 begin
     v_user_id := auth.uid();
@@ -437,25 +442,38 @@ begin
         raise exception 'Laimėtojo baigtis turi būti YES arba NO!';
     end if;
 
-    select status into v_status from markets where id = p_market_id for update;
+    select status, token_pool into v_status, v_token_pool
+    from markets where id = p_market_id for update;
+
     if v_status <> 'active' then
         raise exception 'Rinka jau išspręsta arba atšaukta!';
     end if;
 
-    for v_pos in 
-        select user_id, yes_shares, no_shares 
-        from positions 
+    -- Apskaičiuojame visas laimėjusias akcijas
+    select coalesce(sum(
+        case when p_winning_outcome = 'YES' then yes_shares else no_shares end
+    ), 0) into v_total_winning_shares
+    from positions
+    where market_id = p_market_id and (yes_shares > 0 or no_shares > 0);
+
+    -- Išmoka per akciją iš realaus baseino (zero-sum)
+    if v_total_winning_shares > 0 and v_token_pool > 0 then
+        v_payout_per_share := v_token_pool / v_total_winning_shares;
+    else
+        v_payout_per_share := 0;
+    end if;
+
+    for v_pos in
+        select user_id, yes_shares, no_shares
+        from positions
         where market_id = p_market_id and (yes_shares > 0 or no_shares > 0)
     loop
-        if p_winning_outcome = 'YES' then
-            v_payout := v_pos.yes_shares * 100.0;
-        else
-            v_payout := v_pos.no_shares * 100.0;
-        end if;
+        v_winning_shares := case when p_winning_outcome = 'YES' then v_pos.yes_shares else v_pos.no_shares end;
+        v_payout := v_winning_shares * v_payout_per_share;
 
         if v_payout > 0 then
-            update profiles 
-            set token_balance = token_balance + v_payout 
+            update profiles
+            set token_balance = token_balance + v_payout
             where id = v_pos.user_id;
 
             insert into transactions (user_id, market_id, type, token_amount, share_amount, price_per_share, created_at)
@@ -463,16 +481,16 @@ begin
                 v_pos.user_id,
                 p_market_id,
                 'payout'::text,
-                -v_payout,
-                case when p_winning_outcome = 'YES' then v_pos.yes_shares else v_pos.no_shares end,
-                100.0,
+                v_payout,
+                v_winning_shares,
+                v_payout_per_share,
                 now()
             );
         end if;
     end loop;
 
-    update markets 
-    set 
+    update markets
+    set
         status = 'resolved',
         outcome = p_winning_outcome,
         resolved_at = now()

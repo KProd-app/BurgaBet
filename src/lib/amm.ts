@@ -116,6 +116,32 @@ export function getExpectedNewReserves(
 }
 
 /**
+ * Apskaičiuoja pradines AMM rezervų reikšmes pagal norimą pradinio YES tikimybę.
+ * prob: 0–100 (pvz. 70 reiškia 70% YES tikimybę)
+ */
+export function getInitialReservesFromProb(
+  liquidity: number,
+  yesProb: number
+): { yesReserves: number; noReserves: number } {
+  const clampedProb = Math.max(1, Math.min(99, yesProb));
+  return {
+    yesReserves: liquidity * (1 - clampedProb / 100),
+    noReserves: liquidity * (clampedProb / 100),
+  };
+}
+
+/**
+ * Apskaičiuoja prognozuojamą išmoką per akciją pagal baseino dydį.
+ */
+export function estimatePayoutPerShare(
+  tokenPool: number,
+  totalWinningShares: number
+): number {
+  if (totalWinningShares <= 0 || tokenPool <= 0) return 0;
+  return tokenPool / totalWinningShares;
+}
+
+/**
  * Apskaičiuoja kainos poveikį (Slippage) procentais.
  */
 export function calculateSlippage(
