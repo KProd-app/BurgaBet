@@ -109,7 +109,7 @@ export default function Dashboard() {
   const [isDemoMode, setIsDemoMode] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(false);
   const [userLoading, setUserLoading] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<'markets' | 'portfolio' | 'admin'>('markets');
+  const [activeTab, setActiveTab] = useState<'markets' | 'portfolio' | 'slots' | 'admin'>('markets');
   
   // Duomenys
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
@@ -169,6 +169,13 @@ export default function Dashboard() {
   const [editMarketCategoryId, setEditMarketCategoryId] = useState<string>('none');
   const [isEditMarketModalOpen, setIsEditMarketModalOpen] = useState<boolean>(false);
   const [editMarketMessage, setEditMarketMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+
+  // Slotai
+  const [slotBetAmount, setSlotBetAmount] = useState<number>(10);
+  const [slotReels, setSlotReels] = useState<string[]>(['seven', 'diamond', 'star']);
+  const [slotSpinning, setSlotSpinning] = useState<boolean>(false);
+  const [slotResult, setSlotResult] = useState<{ multiplier: number; payout: number; net: number } | null>(null);
+  const [slotHistory, setSlotHistory] = useState<Array<{ reels: string[]; multiplier: number; net: number }>>([]);
 
   // Toast pranešimai
   const [toasts, setToasts] = useState<Array<{ id: string; type: 'success' | 'error' | 'info'; text: string }>>([]);
@@ -1273,6 +1280,113 @@ export default function Dashboard() {
     ? AMM.calculateSlippage(selectedMarket.yes_reserves, selectedMarket.no_reserves, betOutcome, betAmountNum)
     : 0;
 
+  // ── SLOTAI ────────────────────────────────────────────────────────────────
+
+  const SLOT_SYMBOLS: Record<string, { emoji: string; label: string; bg: string }> = {
+    cherry:  { emoji: '🍒', label: 'Vyšnia',     bg: 'bg-red-950/60 border-red-800/50' },
+    lemon:   { emoji: '🍋', label: 'Citrina',    bg: 'bg-yellow-950/60 border-yellow-800/50' },
+    orange:  { emoji: '🍊', label: 'Apelsinas',  bg: 'bg-orange-950/60 border-orange-800/50' },
+    grape:   { emoji: '🍇', label: 'Vynuogės',   bg: 'bg-purple-950/60 border-purple-800/50' },
+    star:    { emoji: '⭐', label: 'Žvaigždė',   bg: 'bg-yellow-950/60 border-yellow-700/50' },
+    diamond: { emoji: '💎', label: 'Deimantas',  bg: 'bg-cyan-950/60 border-cyan-700/50' },
+    seven:   { emoji: '7️⃣', label: 'Septynetas', bg: 'bg-emerald-950/60 border-emerald-700/50' },
+  };
+  const SLOT_KEYS   = ['cherry','lemon','orange','grape','star','diamond','seven'];
+  const SLOT_WEIGHTS = [30, 25, 20, 12, 7, 4, 2];
+
+  const slotWeightedRandom = (): string => {
+    const rand = Math.random() * 100;
+    let cum = 0;
+    for (let i = 0; i < SLOT_KEYS.length; i++) {
+      cum += SLOT_WEIGHTS[i];
+      if (rand < cum) return SLOT_KEYS[i];
+    }
+    return SLOT_KEYS[0];
+  };
+
+  const slotCalcPayout = (reels: string[], bet: number) => {
+    let multiplier = 0;
+    if (reels[0] === reels[1] && reels[1] === reels[2]) {
+      const m: Record<string, number> = { diamond: 50, seven: 20, star: 10, grape: 5, orange: 4, lemon: 3, cherry: 2 };
+      multiplier = m[reels[0]] ?? 2;
+    } else {
+      const matched =
+        reels[0] === reels[1] ? reels[0] :
+        reels[1] === reels[2] ? reels[1] :
+        reels[0] === reels[2] ? reels[0] : null;
+      if (matched) {
+        const r: Record<string, number> = { diamond: 3, seven: 2, star: 1.5 };
+        multiplier = r[matched] ?? 0;
+      }
+    }
+    const payout = bet * multiplier;
+    return { multiplier, payout, net: payout - bet };
+  };
+
+  const handleSpin = async () => {
+    if (!currentUser || slotSpinning) return;
+    if (currentUser.token_balance < slotBetAmount) {
+      showToast('error', 'Nepakankamas balansas slotams!');
+      return;
+    }
+
+    setSlotSpinning(true);
+    setSlotResult(null);
+
+    const spinInterval = setInterval(() => {
+      setSlotReels([slotWeightedRandom(), slotWeightedRandom(), slotWeightedRandom()]);
+    }, 80);
+
+    if (isDemoMode) {
+      setTimeout(() => {
+        clearInterval(spinInterval);
+        const finalReels = [slotWeightedRandom(), slotWeightedRandom(), slotWeightedRandom()];
+        const result = slotCalcPayout(finalReels, slotBetAmount);
+
+        setSlotReels(finalReels);
+        setSlotResult(result);
+        setSlotSpinning(false);
+
+        const localProfiles: Profile[] = JSON.parse(localStorage.getItem('bb_profiles') || '[]');
+        const idx = localProfiles.findIndex(p => p.id === currentUser.id);
+        if (idx !== -1) {
+          localProfiles[idx].token_balance = Math.max(0, localProfiles[idx].token_balance - slotBetAmount + result.payout);
+          localStorage.setItem('bb_profiles', JSON.stringify(localProfiles));
+          setCurrentUser({ ...localProfiles[idx] });
+          setLeaderboard([...localProfiles].sort((a, b) => b.token_balance - a.token_balance));
+        }
+
+        setSlotHistory(prev => [{ reels: finalReels, multiplier: result.multiplier, net: result.net }, ...prev].slice(0, 8));
+        if (result.multiplier >= 10) showToast('success', `🎉 JACKPOT! Laimėjote ${result.payout.toFixed(0)} žetonų! (${result.multiplier}x)`);
+        else if (result.net > 0) showToast('success', `✨ Laimėjote ${result.payout.toFixed(0)} žetonų! (${result.multiplier}x)`);
+      }, 1800);
+    } else {
+      setTimeout(async () => {
+        clearInterval(spinInterval);
+        try {
+          const { data, error } = await supabase.rpc('spin_slots', { p_bet_amount: slotBetAmount });
+          if (error) throw error;
+
+          const finalReels: string[] = data.reels;
+          const result = { multiplier: Number(data.multiplier), payout: Number(data.payout), net: Number(data.net) };
+
+          setSlotReels(finalReels);
+          setSlotResult(result);
+          setSlotHistory(prev => [{ reels: finalReels, ...result }, ...prev].slice(0, 8));
+
+          await loadMarketsAndLeaderboard(false, currentUser.id);
+
+          if (result.multiplier >= 10) showToast('success', `🎉 JACKPOT! Laimėjote ${result.payout.toFixed(0)} žetonų! (${result.multiplier}x)`);
+          else if (result.net > 0) showToast('success', `✨ Laimėjote ${result.payout.toFixed(0)} žetonų! (${result.multiplier}x)`);
+        } catch (err: any) {
+          showToast('error', err.message || 'Klaida sukant slotus.');
+        } finally {
+          setSlotSpinning(false);
+        }
+      }, 1800);
+    }
+  };
+
   // Filtravimo ir paieškos logika
   const filteredMarkets = markets.filter(market => {
     // 1. Kategorijos filtras
@@ -1427,6 +1541,17 @@ export default function Dashboard() {
         >
           <Briefcase className="w-4 h-4" />
           Portfelis ir Lyderiai
+        </button>
+
+        <button
+          onClick={() => { setActiveTab('slots'); setSelectedMarket(null); setBetMessage(null); setSlotResult(null); }}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 ${
+            activeTab === 'slots'
+              ? 'bg-zinc-800 text-white shadow-md border-b-2 border-emerald-500'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+          }`}
+        >
+          🎰 Slotai
         </button>
 
         {currentUser?.is_admin && (
@@ -1955,7 +2080,206 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* TAB 3: ADMIN PANEL */}
+        {/* TAB 3: SLOTAI */}
+        {activeTab === 'slots' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+            {/* SLOT MACHINE */}
+            <div className="lg:col-span-2 flex flex-col items-center gap-6">
+
+              {!currentUser && (
+                <div className="w-full p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800 text-center text-zinc-400 text-sm">
+                  Prisijunkite, kad žaistumėte slotus.
+                </div>
+              )}
+
+              {/* MACHINE BODY */}
+              <div className="w-full max-w-md">
+                <div className="p-6 rounded-3xl bg-gradient-to-b from-zinc-800 to-zinc-900 border-2 border-zinc-700 shadow-2xl space-y-6">
+
+                  {/* Title */}
+                  <div className="text-center">
+                    <h2 className="text-2xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-400 via-yellow-300 to-emerald-400 bg-clip-text text-transparent">
+                      🎰 BurgaBet Slotai
+                    </h2>
+                    <p className="text-xs text-zinc-500 mt-0.5">Laimė laukia!</p>
+                  </div>
+
+                  {/* REELS */}
+                  <div className="flex gap-3 justify-center">
+                    {slotReels.map((sym, i) => {
+                      const s = SLOT_SYMBOLS[sym] ?? SLOT_SYMBOLS['cherry'];
+                      return (
+                        <div
+                          key={i}
+                          className={`flex-1 aspect-square flex items-center justify-center rounded-2xl border-2 text-5xl
+                            transition-all duration-100 shadow-inner
+                            ${slotSpinning ? 'scale-95 opacity-80' : 'scale-100 opacity-100'}
+                            ${slotResult && slotResult.multiplier > 0 && !slotSpinning ? 'ring-2 ring-emerald-400/60' : ''}
+                            ${s.bg}`}
+                        >
+                          {s.emoji}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* RESULT MESSAGE */}
+                  <div className="h-10 flex items-center justify-center">
+                    {slotResult && !slotSpinning && (
+                      <div className={`text-sm font-bold px-4 py-2 rounded-xl ${
+                        slotResult.net > 0
+                          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                          : slotResult.multiplier > 0
+                            ? 'bg-zinc-800 text-zinc-300'
+                            : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                      }`}>
+                        {slotResult.multiplier === 0
+                          ? '😞 Nesisekė. Bandykite dar kartą!'
+                          : slotResult.multiplier >= 10
+                            ? `🎉 JACKPOT! +${slotResult.payout.toFixed(0)} žetonų (${slotResult.multiplier}x)`
+                            : `✨ Laimėjote! +${slotResult.payout.toFixed(0)} žetonų (${slotResult.multiplier}x)`}
+                      </div>
+                    )}
+                    {slotSpinning && (
+                      <div className="text-sm text-zinc-500 animate-pulse font-semibold">Sukasi...</div>
+                    )}
+                  </div>
+
+                  {/* BET SELECTOR */}
+                  <div>
+                    <div className="text-xs text-zinc-400 font-semibold mb-2 text-center">Statymas</div>
+                    <div className="grid grid-cols-4 gap-2">
+                      {[10, 25, 50, 100].map(val => (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => setSlotBetAmount(val)}
+                          disabled={slotSpinning}
+                          className={`py-2.5 rounded-xl font-bold text-sm transition-all border ${
+                            slotBetAmount === val
+                              ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg'
+                              : 'bg-zinc-900 text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-white'
+                          } disabled:opacity-40`}
+                        >
+                          {val}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* SPIN BUTTON */}
+                  <button
+                    type="button"
+                    onClick={handleSpin}
+                    disabled={!currentUser || slotSpinning || (!!currentUser && currentUser.token_balance < slotBetAmount)}
+                    className="w-full py-4 rounded-2xl font-extrabold text-lg transition-all shadow-lg
+                      bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400
+                      text-white disabled:opacity-40 disabled:cursor-not-allowed
+                      active:scale-95"
+                  >
+                    {slotSpinning ? '⏳ Sukasi...' : `🎰 SUKTI — ${slotBetAmount} žetonų`}
+                  </button>
+
+                  {/* BALANCE */}
+                  {currentUser && (
+                    <div className="flex justify-between text-xs text-zinc-500 px-1">
+                      <span>Balansas:</span>
+                      <span className="font-bold text-emerald-400">{currentUser.token_balance.toFixed(0)} žetonų</span>
+                    </div>
+                  )}
+
+                </div>
+              </div>
+
+              {/* HISTORY */}
+              {slotHistory.length > 0 && (
+                <div className="w-full max-w-md space-y-2">
+                  <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Paskutiniai sukimai</h3>
+                  <div className="space-y-1.5">
+                    {slotHistory.map((h, i) => (
+                      <div key={i} className={`flex items-center justify-between px-4 py-2 rounded-xl border text-xs ${
+                        h.net > 0 ? 'bg-emerald-950/30 border-emerald-800/40' : 'bg-zinc-900/40 border-zinc-800'
+                      }`}>
+                        <div className="flex gap-1.5 text-base">
+                          {h.reels.map((s, j) => (
+                            <span key={j}>{SLOT_SYMBOLS[s]?.emoji ?? '❓'}</span>
+                          ))}
+                        </div>
+                        <div className={`font-bold ${h.net > 0 ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                          {h.net > 0 ? `+${h.net.toFixed(0)}` : h.net === 0 ? '±0' : h.net.toFixed(0)} žet.
+                          {h.multiplier > 0 && <span className="text-zinc-600 font-normal ml-1">({h.multiplier}x)</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* PAYOUT TABLE */}
+            <div className="lg:col-span-1 space-y-4">
+              <div className="p-5 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-xl space-y-4">
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-emerald-500" />
+                  Išmokų lentelė
+                </h3>
+
+                <div className="space-y-1.5 text-xs">
+                  {[
+                    { combo: ['diamond','diamond','diamond'], mult: 50, label: '3× Deimantas' },
+                    { combo: ['seven','seven','seven'],    mult: 20, label: '3× Septynetas' },
+                    { combo: ['star','star','star'],       mult: 10, label: '3× Žvaigždė' },
+                    { combo: ['grape','grape','grape'],    mult: 5,  label: '3× Vynuogės' },
+                    { combo: ['orange','orange','orange'], mult: 4,  label: '3× Apelsinas' },
+                    { combo: ['lemon','lemon','lemon'],    mult: 3,  label: '3× Citrina' },
+                    { combo: ['cherry','cherry','cherry'], mult: 2,  label: '3× Vyšnia' },
+                    { combo: ['diamond','diamond','lemon'],mult: 3,  label: '2× Deimantas' },
+                    { combo: ['seven','seven','lemon'],    mult: 2,  label: '2× Septynetas' },
+                    { combo: ['star','star','lemon'],      mult: 1.5,label: '2× Žvaigždė' },
+                  ].map((row, i) => (
+                    <div key={i} className={`flex items-center justify-between px-3 py-2 rounded-xl ${
+                      i < 3 ? 'bg-emerald-950/30 border border-emerald-800/30' : 'bg-zinc-900/50'
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        <div className="flex gap-0.5 text-base">
+                          {row.combo.map((s, j) => (
+                            <span key={j}>{SLOT_SYMBOLS[s]?.emoji}</span>
+                          ))}
+                        </div>
+                        <span className="text-zinc-400">{row.label}</span>
+                      </div>
+                      <span className={`font-extrabold ml-2 ${
+                        row.mult >= 10 ? 'text-emerald-400' : row.mult >= 5 ? 'text-yellow-400' : 'text-zinc-300'
+                      }`}>
+                        {row.mult}×
+                      </span>
+                    </div>
+                  ))}
+                  <div className="px-3 py-2 rounded-xl bg-zinc-900/50 flex justify-between text-zinc-600">
+                    <span>Kita kombinacija</span>
+                    <span className="font-bold">0×</span>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-zinc-800 space-y-1.5 text-[10px] text-zinc-500">
+                  <div className="flex justify-between">
+                    <span>Simbolių tikimybės:</span>
+                  </div>
+                  {SLOT_KEYS.map((k, i) => (
+                    <div key={k} className="flex justify-between">
+                      <span>{SLOT_SYMBOLS[k]?.emoji} {SLOT_SYMBOLS[k]?.label}</span>
+                      <span>{SLOT_WEIGHTS[i]}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+          </div>
+        )}
+
+        {/* TAB 4: ADMIN PANEL */}
         {activeTab === 'admin' && currentUser?.is_admin && (
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
 
