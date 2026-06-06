@@ -3,6 +3,47 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import * as AMM from '@/lib/amm';
+
+// ── SLOTAI: konstantos modulio lygyje (ne komponento viduje) ─────────────────
+
+const SLOT_SYMBOLS: Record<string, { img: string; label: string; bg: string }> = {
+  macbook: { img: 'https://burga.lt/cdn/shop/files/GK_04M_Macbooks_1.jpg?v=1778231223&width=400',           label: 'MacBook dėklas',  bg: 'bg-zinc-800/80 border-zinc-600/60' },
+  flap:    { img: 'https://burga.lt/cdn/shop/files/GK_04M5_Flap_1.jpg?v=1778244849&width=400',             label: 'Flap dėklas',     bg: 'bg-blue-950/70 border-blue-700/50' },
+  iphone:  { img: 'https://burga.lt/cdn/shop/files/GK_04EL_iPhone_12_Pro_Max_EL_GO_1.jpg?v=1778232685&width=400', label: 'iPhone dėklas',   bg: 'bg-zinc-900/80 border-zinc-500/50' },
+  gold:    { img: 'https://burga.lt/cdn/shop/files/GK_04MS_5K_FL_GO_1.jpg?v=1778231423&width=400',         label: 'Gold serija',     bg: 'bg-yellow-950/70 border-yellow-700/50' },
+  ring:    { img: 'https://burga.lt/cdn/shop/files/RB-05A-AP6A.jpg?v=1763973284&width=400',                label: 'Ring Bumper',     bg: 'bg-purple-950/70 border-purple-700/50' },
+  silver:  { img: 'https://burga.lt/cdn/shop/files/GK_03MR_Silver_1.jpg?v=1778232850&width=400',           label: 'Silver Ring',     bg: 'bg-cyan-950/70 border-cyan-700/60' },
+};
+const SLOT_KEYS    = ['macbook', 'flap', 'iphone', 'gold', 'ring', 'silver'] as const;
+const SLOT_WEIGHTS = [30, 25, 20, 12, 8, 5];
+
+function slotWeightedRandom(): string {
+  const rand = Math.random() * 100;
+  let cum = 0;
+  for (let i = 0; i < SLOT_KEYS.length; i++) {
+    cum += SLOT_WEIGHTS[i];
+    if (rand < cum) return SLOT_KEYS[i];
+  }
+  return SLOT_KEYS[0];
+}
+
+function slotCalcPayout(reels: string[], bet: number) {
+  const THREE_PAYOUTS: Record<string, number> = { silver: 50, ring: 20, gold: 10, iphone: 5, flap: 3, macbook: 2 };
+  const TWO_PAYOUTS:   Record<string, number> = { silver: 3, ring: 2, gold: 1.5 };
+
+  let multiplier = 0;
+  if (reels[0] === reels[1] && reels[1] === reels[2]) {
+    multiplier = THREE_PAYOUTS[reels[0]] ?? 0;
+  } else {
+    const matched =
+      reels[0] === reels[1] ? reels[0] :
+      reels[1] === reels[2] ? reels[1] :
+      reels[0] === reels[2] ? reels[0] : null;
+    if (matched) multiplier = TWO_PAYOUTS[matched] ?? 0;
+  }
+  const payout = bet * multiplier;
+  return { multiplier, payout, net: payout - bet };
+}
 import { 
   Coins, 
   Award, 
@@ -172,7 +213,7 @@ export default function Dashboard() {
 
   // Slotai
   const [slotBetAmount, setSlotBetAmount] = useState<number>(10);
-  const [slotReels, setSlotReels] = useState<string[]>(['seven', 'diamond', 'star']);
+  const [slotReels, setSlotReels] = useState<string[]>(['macbook', 'ring', 'silver']);
   const [slotSpinning, setSlotSpinning] = useState<boolean>(false);
   const [slotResult, setSlotResult] = useState<{ multiplier: number; payout: number; net: number } | null>(null);
   const [slotHistory, setSlotHistory] = useState<Array<{ reels: string[]; multiplier: number; net: number }>>([]);
@@ -1279,48 +1320,6 @@ export default function Dashboard() {
   const estimatedSlippage = selectedMarket
     ? AMM.calculateSlippage(selectedMarket.yes_reserves, selectedMarket.no_reserves, betOutcome, betAmountNum)
     : 0;
-
-  // ── SLOTAI ────────────────────────────────────────────────────────────────
-
-  const SLOT_SYMBOLS: Record<string, { img: string; label: string; bg: string }> = {
-    macbook: { img: 'https://burga.lt/cdn/shop/files/GK_04M_Macbooks_1.jpg?v=1778231223&width=400',           label: 'MacBook dėklas',  bg: 'bg-zinc-800/80 border-zinc-600/60' },
-    flap:    { img: 'https://burga.lt/cdn/shop/files/GK_04M5_Flap_1.jpg?v=1778244849&width=400',             label: 'Flap dėklas',     bg: 'bg-blue-950/70 border-blue-700/50' },
-    iphone:  { img: 'https://burga.lt/cdn/shop/files/GK_04EL_iPhone_12_Pro_Max_EL_GO_1.jpg?v=1778232685&width=400', label: 'iPhone dėklas',   bg: 'bg-zinc-900/80 border-zinc-500/50' },
-    gold:    { img: 'https://burga.lt/cdn/shop/files/GK_04MS_5K_FL_GO_1.jpg?v=1778231423&width=400',         label: 'Gold serija',     bg: 'bg-yellow-950/70 border-yellow-700/50' },
-    ring:    { img: 'https://burga.lt/cdn/shop/files/RB-05A-AP6A.jpg?v=1763973284&width=400',                label: 'Ring Bumper',     bg: 'bg-purple-950/70 border-purple-700/50' },
-    silver:  { img: 'https://burga.lt/cdn/shop/files/GK_03MR_Silver_1.jpg?v=1778232850&width=400',           label: 'Silver Ring',     bg: 'bg-cyan-950/70 border-cyan-700/60' },
-  };
-  const SLOT_KEYS    = ['macbook', 'flap', 'iphone', 'gold', 'ring', 'silver'];
-  const SLOT_WEIGHTS = [30, 25, 20, 12, 8, 5];
-
-  const slotWeightedRandom = (): string => {
-    const rand = Math.random() * 100;
-    let cum = 0;
-    for (let i = 0; i < SLOT_KEYS.length; i++) {
-      cum += SLOT_WEIGHTS[i];
-      if (rand < cum) return SLOT_KEYS[i];
-    }
-    return SLOT_KEYS[0];
-  };
-
-  const slotCalcPayout = (reels: string[], bet: number) => {
-    let multiplier = 0;
-    if (reels[0] === reels[1] && reels[1] === reels[2]) {
-      const m: Record<string, number> = { silver: 50, ring: 20, gold: 10, iphone: 5, flap: 3, macbook: 2 };
-      multiplier = m[reels[0]] ?? 2;
-    } else {
-      const matched =
-        reels[0] === reels[1] ? reels[0] :
-        reels[1] === reels[2] ? reels[1] :
-        reels[0] === reels[2] ? reels[0] : null;
-      if (matched) {
-        const r: Record<string, number> = { silver: 3, ring: 2, gold: 1.5 };
-        multiplier = r[matched] ?? 0;
-      }
-    }
-    const payout = bet * multiplier;
-    return { multiplier, payout, net: payout - bet };
-  };
 
   const handleSpin = async () => {
     if (!currentUser || slotSpinning) return;
