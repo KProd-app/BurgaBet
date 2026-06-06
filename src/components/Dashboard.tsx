@@ -1282,17 +1282,16 @@ export default function Dashboard() {
 
   // ── SLOTAI ────────────────────────────────────────────────────────────────
 
-  const SLOT_SYMBOLS: Record<string, { emoji: string; label: string; bg: string }> = {
-    cherry:  { emoji: '🍒', label: 'Vyšnia',     bg: 'bg-red-950/60 border-red-800/50' },
-    lemon:   { emoji: '🍋', label: 'Citrina',    bg: 'bg-yellow-950/60 border-yellow-800/50' },
-    orange:  { emoji: '🍊', label: 'Apelsinas',  bg: 'bg-orange-950/60 border-orange-800/50' },
-    grape:   { emoji: '🍇', label: 'Vynuogės',   bg: 'bg-purple-950/60 border-purple-800/50' },
-    star:    { emoji: '⭐', label: 'Žvaigždė',   bg: 'bg-yellow-950/60 border-yellow-700/50' },
-    diamond: { emoji: '💎', label: 'Deimantas',  bg: 'bg-cyan-950/60 border-cyan-700/50' },
-    seven:   { emoji: '7️⃣', label: 'Septynetas', bg: 'bg-emerald-950/60 border-emerald-700/50' },
+  const SLOT_SYMBOLS: Record<string, { img: string; label: string; bg: string }> = {
+    macbook: { img: 'https://burga.lt/cdn/shop/files/GK_04M_Macbooks_1.jpg?v=1778231223&width=400',           label: 'MacBook dėklas',  bg: 'bg-zinc-800/80 border-zinc-600/60' },
+    flap:    { img: 'https://burga.lt/cdn/shop/files/GK_04M5_Flap_1.jpg?v=1778244849&width=400',             label: 'Flap dėklas',     bg: 'bg-blue-950/70 border-blue-700/50' },
+    iphone:  { img: 'https://burga.lt/cdn/shop/files/GK_04EL_iPhone_12_Pro_Max_EL_GO_1.jpg?v=1778232685&width=400', label: 'iPhone dėklas',   bg: 'bg-zinc-900/80 border-zinc-500/50' },
+    gold:    { img: 'https://burga.lt/cdn/shop/files/GK_04MS_5K_FL_GO_1.jpg?v=1778231423&width=400',         label: 'Gold serija',     bg: 'bg-yellow-950/70 border-yellow-700/50' },
+    ring:    { img: 'https://burga.lt/cdn/shop/files/RB-05A-AP6A.jpg?v=1763973284&width=400',                label: 'Ring Bumper',     bg: 'bg-purple-950/70 border-purple-700/50' },
+    silver:  { img: 'https://burga.lt/cdn/shop/files/GK_03MR_Silver_1.jpg?v=1778232850&width=400',           label: 'Silver Ring',     bg: 'bg-cyan-950/70 border-cyan-700/60' },
   };
-  const SLOT_KEYS   = ['cherry','lemon','orange','grape','star','diamond','seven'];
-  const SLOT_WEIGHTS = [30, 25, 20, 12, 7, 4, 2];
+  const SLOT_KEYS    = ['macbook', 'flap', 'iphone', 'gold', 'ring', 'silver'];
+  const SLOT_WEIGHTS = [30, 25, 20, 12, 8, 5];
 
   const slotWeightedRandom = (): string => {
     const rand = Math.random() * 100;
@@ -1307,7 +1306,7 @@ export default function Dashboard() {
   const slotCalcPayout = (reels: string[], bet: number) => {
     let multiplier = 0;
     if (reels[0] === reels[1] && reels[1] === reels[2]) {
-      const m: Record<string, number> = { diamond: 50, seven: 20, star: 10, grape: 5, orange: 4, lemon: 3, cherry: 2 };
+      const m: Record<string, number> = { silver: 50, ring: 20, gold: 10, iphone: 5, flap: 3, macbook: 2 };
       multiplier = m[reels[0]] ?? 2;
     } else {
       const matched =
@@ -1315,7 +1314,7 @@ export default function Dashboard() {
         reels[1] === reels[2] ? reels[1] :
         reels[0] === reels[2] ? reels[0] : null;
       if (matched) {
-        const r: Record<string, number> = { diamond: 3, seven: 2, star: 1.5 };
+        const r: Record<string, number> = { silver: 3, ring: 2, gold: 1.5 };
         multiplier = r[matched] ?? 0;
       }
     }
@@ -2108,17 +2107,22 @@ export default function Dashboard() {
                   {/* REELS */}
                   <div className="flex gap-3 justify-center">
                     {slotReels.map((sym, i) => {
-                      const s = SLOT_SYMBOLS[sym] ?? SLOT_SYMBOLS['cherry'];
+                      const s = SLOT_SYMBOLS[sym] ?? SLOT_SYMBOLS['macbook'];
                       return (
                         <div
                           key={i}
-                          className={`flex-1 aspect-square flex items-center justify-center rounded-2xl border-2 text-5xl
+                          className={`flex-1 aspect-square rounded-2xl border-2 overflow-hidden
                             transition-all duration-100 shadow-inner
-                            ${slotSpinning ? 'scale-95 opacity-80' : 'scale-100 opacity-100'}
-                            ${slotResult && slotResult.multiplier > 0 && !slotSpinning ? 'ring-2 ring-emerald-400/60' : ''}
+                            ${slotSpinning ? 'scale-95 opacity-70 blur-[1px]' : 'scale-100 opacity-100 blur-0'}
+                            ${slotResult && slotResult.multiplier > 0 && !slotSpinning ? 'ring-2 ring-emerald-400/70 shadow-emerald-500/20 shadow-lg' : ''}
                             ${s.bg}`}
                         >
-                          {s.emoji}
+                          <img
+                            src={s.img}
+                            alt={s.label}
+                            className="w-full h-full object-cover"
+                            draggable={false}
+                          />
                         </div>
                       );
                     })}
@@ -2201,9 +2205,11 @@ export default function Dashboard() {
                       <div key={i} className={`flex items-center justify-between px-4 py-2 rounded-xl border text-xs ${
                         h.net > 0 ? 'bg-emerald-950/30 border-emerald-800/40' : 'bg-zinc-900/40 border-zinc-800'
                       }`}>
-                        <div className="flex gap-1.5 text-base">
+                        <div className="flex gap-1.5">
                           {h.reels.map((s, j) => (
-                            <span key={j}>{SLOT_SYMBOLS[s]?.emoji ?? '❓'}</span>
+                            <div key={j} className={`w-9 h-9 rounded-lg overflow-hidden border ${SLOT_SYMBOLS[s]?.bg ?? ''}`}>
+                              <img src={SLOT_SYMBOLS[s]?.img} alt={SLOT_SYMBOLS[s]?.label} className="w-full h-full object-cover" />
+                            </div>
                           ))}
                         </div>
                         <div className={`font-bold ${h.net > 0 ? 'text-emerald-400' : 'text-zinc-500'}`}>
@@ -2227,48 +2233,52 @@ export default function Dashboard() {
 
                 <div className="space-y-1.5 text-xs">
                   {[
-                    { combo: ['diamond','diamond','diamond'], mult: 50, label: '3× Deimantas' },
-                    { combo: ['seven','seven','seven'],    mult: 20, label: '3× Septynetas' },
-                    { combo: ['star','star','star'],       mult: 10, label: '3× Žvaigždė' },
-                    { combo: ['grape','grape','grape'],    mult: 5,  label: '3× Vynuogės' },
-                    { combo: ['orange','orange','orange'], mult: 4,  label: '3× Apelsinas' },
-                    { combo: ['lemon','lemon','lemon'],    mult: 3,  label: '3× Citrina' },
-                    { combo: ['cherry','cherry','cherry'], mult: 2,  label: '3× Vyšnia' },
-                    { combo: ['diamond','diamond','lemon'],mult: 3,  label: '2× Deimantas' },
-                    { combo: ['seven','seven','lemon'],    mult: 2,  label: '2× Septynetas' },
-                    { combo: ['star','star','lemon'],      mult: 1.5,label: '2× Žvaigždė' },
+                    { combo: ['silver','silver','silver'], mult: 50, label: '3× Silver Ring' },
+                    { combo: ['ring','ring','ring'],       mult: 20, label: '3× Ring Bumper' },
+                    { combo: ['gold','gold','gold'],       mult: 10, label: '3× Gold serija' },
+                    { combo: ['iphone','iphone','iphone'], mult: 5,  label: '3× iPhone dėklas' },
+                    { combo: ['flap','flap','flap'],       mult: 3,  label: '3× Flap dėklas' },
+                    { combo: ['macbook','macbook','macbook'], mult: 2, label: '3× MacBook dėklas' },
+                    { combo: ['silver','silver','flap'],   mult: 3,  label: '2× Silver Ring' },
+                    { combo: ['ring','ring','flap'],       mult: 2,  label: '2× Ring Bumper' },
+                    { combo: ['gold','gold','flap'],       mult: 1.5,label: '2× Gold serija' },
                   ].map((row, i) => (
-                    <div key={i} className={`flex items-center justify-between px-3 py-2 rounded-xl ${
+                    <div key={i} className={`flex items-center justify-between px-2 py-1.5 rounded-xl ${
                       i < 3 ? 'bg-emerald-950/30 border border-emerald-800/30' : 'bg-zinc-900/50'
                     }`}>
                       <div className="flex items-center gap-2">
-                        <div className="flex gap-0.5 text-base">
+                        <div className="flex gap-0.5">
                           {row.combo.map((s, j) => (
-                            <span key={j}>{SLOT_SYMBOLS[s]?.emoji}</span>
+                            <div key={j} className="w-7 h-7 rounded-md overflow-hidden border border-zinc-700">
+                              <img src={SLOT_SYMBOLS[s]?.img} alt={s} className="w-full h-full object-cover" />
+                            </div>
                           ))}
                         </div>
-                        <span className="text-zinc-400">{row.label}</span>
+                        <span className="text-zinc-400 text-[10px]">{row.label}</span>
                       </div>
-                      <span className={`font-extrabold ml-2 ${
+                      <span className={`font-extrabold ml-1 text-sm ${
                         row.mult >= 10 ? 'text-emerald-400' : row.mult >= 5 ? 'text-yellow-400' : 'text-zinc-300'
                       }`}>
                         {row.mult}×
                       </span>
                     </div>
                   ))}
-                  <div className="px-3 py-2 rounded-xl bg-zinc-900/50 flex justify-between text-zinc-600">
+                  <div className="px-2 py-1.5 rounded-xl bg-zinc-900/50 flex justify-between text-zinc-600 text-[10px]">
                     <span>Kita kombinacija</span>
                     <span className="font-bold">0×</span>
                   </div>
                 </div>
 
                 <div className="pt-2 border-t border-zinc-800 space-y-1.5 text-[10px] text-zinc-500">
-                  <div className="flex justify-between">
-                    <span>Simbolių tikimybės:</span>
-                  </div>
+                  <p className="font-semibold text-zinc-400">Produktų retumas:</p>
                   {SLOT_KEYS.map((k, i) => (
-                    <div key={k} className="flex justify-between">
-                      <span>{SLOT_SYMBOLS[k]?.emoji} {SLOT_SYMBOLS[k]?.label}</span>
+                    <div key={k} className="flex items-center gap-2 justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-6 h-6 rounded overflow-hidden border border-zinc-700 shrink-0">
+                          <img src={SLOT_SYMBOLS[k]?.img} alt={k} className="w-full h-full object-cover" />
+                        </div>
+                        <span>{SLOT_SYMBOLS[k]?.label}</span>
+                      </div>
                       <span>{SLOT_WEIGHTS[i]}%</span>
                     </div>
                   ))}
