@@ -68,6 +68,33 @@ import {
   Edit3
 } from 'lucide-react';
 
+// Sklandžiai animuoja skaičiaus pasikeitimą (pvz. balansą po statymo)
+function AnimatedNumber({ value, decimals = 0 }: { value: number; decimals?: number }) {
+  const [display, setDisplay] = useState(value);
+  const prevRef = useRef(value);
+
+  useEffect(() => {
+    const from = prevRef.current;
+    const to = value;
+    if (from === to) return;
+    prevRef.current = to;
+
+    const start = performance.now();
+    const duration = 650;
+    let raf = 0;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplay(from + (to - from) * eased);
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+
+  return <span className="tabular-nums">{display.toFixed(decimals)}</span>;
+}
+
 interface Profile {
   id: string;
   email: string;
@@ -154,7 +181,6 @@ export default function Dashboard() {
   
   // Duomenys
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
-  console.log("RENDER: Dashboard. currentUser =", currentUser ? currentUser.email : "null", "isDemoMode =", isDemoMode, "loading =", loading);
   const [markets, setMarkets] = useState<Market[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
@@ -1429,15 +1455,15 @@ export default function Dashboard() {
             </div>
           </div>
         ) : currentUser ? (
-          <div className="flex items-center gap-4 bg-zinc-900/60 border border-zinc-800 p-4 rounded-2xl backdrop-blur-md">
-            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-zinc-800 border border-zinc-700 text-emerald-400 font-bold uppercase">
+          <div className="anim-fade-up flex items-center gap-4 bg-zinc-900/60 border border-zinc-800 p-4 rounded-2xl backdrop-blur-md hover:border-zinc-700 transition-colors">
+            <div className="flex items-center justify-center w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-600/30 to-cyan-500/30 border border-emerald-500/40 text-emerald-300 font-bold uppercase shadow-lg shadow-emerald-900/20">
               {currentUser.full_name?.charAt(0) || 'U'}
             </div>
             <div>
               <div className="text-sm font-semibold">{currentUser.full_name}</div>
               <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-base">
                 <Coins className="w-4 h-4" />
-                <span>{currentUser.token_balance.toFixed(1)} žetonai</span>
+                <span><AnimatedNumber value={currentUser.token_balance} decimals={1} /> žetonai</span>
               </div>
             </div>
             
@@ -1455,7 +1481,7 @@ export default function Dashboard() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => { setAuthMode('login'); setIsAuthModalOpen(true); }}
-              className="flex items-center gap-1.5 px-4 py-2.5 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-200 text-sm font-bold rounded-xl transition-all"
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-200 text-sm font-bold rounded-xl transition-all"
             >
               <LogIn className="w-4 h-4" />
               Prisijungti
@@ -1516,55 +1542,31 @@ export default function Dashboard() {
       </div>
 
       {/* NAVIGATION TABS */}
-      <nav className="flex gap-2 mt-6">
-        <button
-          onClick={() => { setActiveTab('markets'); setSelectedMarket(null); setBetMessage(null); }}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 ${
-            activeTab === 'markets'
-              ? 'bg-zinc-800 text-white shadow-md border-b-2 border-emerald-500'
-              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
-          }`}
-        >
-          <TrendingUp className="w-4 h-4" />
-          Rinkos
-        </button>
-        
-        <button
-          onClick={() => { setActiveTab('portfolio'); setSelectedMarket(null); setBetMessage(null); }}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 ${
-            activeTab === 'portfolio'
-              ? 'bg-zinc-800 text-white shadow-md border-b-2 border-emerald-500'
-              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
-          }`}
-        >
-          <Briefcase className="w-4 h-4" />
-          Portfelis ir Lyderiai
-        </button>
-
-        <button
-          onClick={() => { setActiveTab('slots'); setSelectedMarket(null); setBetMessage(null); setSlotResult(null); }}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 ${
-            activeTab === 'slots'
-              ? 'bg-zinc-800 text-white shadow-md border-b-2 border-emerald-500'
-              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
-          }`}
-        >
-          🎰 Slotai
-        </button>
-
-        {currentUser?.is_admin && (
+      <nav className="flex gap-1.5 mt-6 p-1.5 bg-zinc-900/60 border border-zinc-800 rounded-2xl w-fit max-w-full overflow-x-auto scrollbar-thin backdrop-blur-md">
+        {([
+          { key: 'markets' as const, label: 'Rinkos', icon: <TrendingUp className="w-4 h-4" /> },
+          { key: 'portfolio' as const, label: 'Portfelis ir Lyderiai', icon: <Briefcase className="w-4 h-4" /> },
+          { key: 'slots' as const, label: 'Slotai', icon: <span className="text-base leading-none">🎰</span> },
+          ...(currentUser?.is_admin ? [{ key: 'admin' as const, label: 'Valdymas', icon: <Settings className="w-4 h-4" /> }] : []),
+        ]).map(tab => (
           <button
-            onClick={() => { setActiveTab('admin'); setSelectedMarket(null); setBetMessage(null); }}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 ${
-              activeTab === 'admin'
-                ? 'bg-zinc-800 text-white shadow-md border-b-2 border-emerald-500'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50'
+            key={tab.key}
+            onClick={() => {
+              setActiveTab(tab.key);
+              setSelectedMarket(null);
+              setBetMessage(null);
+              if (tab.key === 'slots') setSlotResult(null);
+            }}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold whitespace-nowrap transition-all duration-200 ${
+              activeTab === tab.key
+                ? 'bg-gradient-to-r from-emerald-600 to-emerald-500 text-white shadow-lg shadow-emerald-900/40 scale-[1.02]'
+                : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70'
             }`}
           >
-            <Settings className="w-4 h-4" />
-            Valdymas (Admin)
+            {tab.icon}
+            {tab.label}
           </button>
-        )}
+        ))}
       </nav>
 
       {/* MAIN TAB CONTENT */}
@@ -1572,13 +1574,13 @@ export default function Dashboard() {
         
         {/* TAB 1: ACTIVE MARKETS */}
         {activeTab === 'markets' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="anim-fade grid grid-cols-1 lg:grid-cols-3 gap-8">
             
             {/* MARKETS GRID */}
             <div className="lg:col-span-2 space-y-6">
               
               {/* FILTERS & SEARCH ROW */}
-              <div className="flex flex-col gap-4 p-4 bg-zinc-900/40 border border-zinc-850 rounded-2xl">
+              <div className="flex flex-col gap-4 p-4 bg-zinc-900/40 border border-zinc-800 rounded-2xl">
                 {/* Search */}
                 <div className="relative">
                   <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
@@ -1631,26 +1633,37 @@ export default function Dashboard() {
               </h2>
               
               {filteredMarkets.filter(m => m.status === 'active').length === 0 ? (
-                <div className="p-12 text-center rounded-2xl bg-zinc-900/30 border border-zinc-800 text-zinc-500">
-                  <Info className="w-12 h-12 mx-auto mb-3 text-zinc-600" />
-                  Nėra aktyvių rinkų, atitinkančių jūsų filtrus.
+                <div className="anim-fade-up p-12 text-center rounded-2xl bg-zinc-900/30 border-2 border-dashed border-zinc-800 text-zinc-500">
+                  <Search className="w-12 h-12 mx-auto mb-3 text-zinc-700" />
+                  <p className="font-semibold text-zinc-400">Nėra aktyvių rinkų, atitinkančių jūsų filtrus.</p>
+                  {(searchQuery || selectedCategoryId !== 'all') && (
+                    <button
+                      type="button"
+                      onClick={() => { setSearchQuery(''); setSelectedCategoryId('all'); }}
+                      className="mt-4 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold rounded-lg transition-colors"
+                    >
+                      Išvalyti filtrus
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {filteredMarkets.filter(m => m.status === 'active').map((market) => {
+                  {filteredMarkets.filter(m => m.status === 'active').map((market, idx) => {
                     const priceYes = AMM.getSpotPrice(market.yes_reserves, market.no_reserves, 'YES');
                     const priceNo = AMM.getSpotPrice(market.yes_reserves, market.no_reserves, 'NO');
                     const isUserPosition = positions.some(p => p.market_id === market.id);
                     const marketCat = categories.find(c => c.id === market.category_id);
+                    const pool = market.token_pool || 0;
 
                     return (
-                      <div 
-                        key={market.id} 
+                      <div
+                        key={market.id}
                         onClick={() => { setSelectedMarket(market); setBetMessage(null); }}
-                        className={`flex flex-col justify-between p-6 rounded-2xl bg-zinc-900/50 border transition-all duration-300 cursor-pointer ${
-                          selectedMarket?.id === market.id 
-                            ? 'border-emerald-500 shadow-md shadow-emerald-500/5 bg-zinc-900' 
-                            : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/70'
+                        style={{ animationDelay: `${Math.min(idx, 8) * 60}ms` }}
+                        className={`anim-fade-up group flex flex-col justify-between p-6 rounded-2xl bg-zinc-900/50 border transition-all duration-300 cursor-pointer hover:-translate-y-1 hover:shadow-xl hover:shadow-black/40 ${
+                          selectedMarket?.id === market.id
+                            ? 'border-emerald-500 shadow-lg shadow-emerald-500/10 bg-zinc-900 ring-1 ring-emerald-500/30'
+                            : 'border-zinc-800 hover:border-zinc-600 hover:bg-zinc-900/80'
                         }`}
                       >
                         <div>
@@ -1666,13 +1679,13 @@ export default function Dashboard() {
                               )}
                             </div>
                             {isUserPosition && (
-                              <span className="text-[10px] font-medium text-zinc-400 bg-zinc-800 px-2 py-0.5 rounded">
-                                Turite poziciją
+                              <span className="text-[10px] font-bold text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                                ● Jūsų pozicija
                               </span>
                             )}
                           </div>
-                          
-                          <h3 className="text-base font-bold text-white line-clamp-2 leading-relaxed">
+
+                          <h3 className="text-base font-bold text-white line-clamp-2 leading-relaxed group-hover:text-emerald-50 transition-colors">
                             {market.question}
                           </h3>
                           <p className="text-xs text-zinc-400 mt-2 line-clamp-2 leading-relaxed">
@@ -1680,20 +1693,47 @@ export default function Dashboard() {
                           </p>
                         </div>
 
-                        <div className="mt-6 pt-4 border-t border-zinc-800/80">
-                          <div className="flex justify-between items-center text-xs text-zinc-500 mb-2">
-                            <span>YES tikimybė</span>
-                            <span>NO tikimybė</span>
+                        <div className="mt-5 space-y-3">
+                          {/* Tikimybės juosta */}
+                          <div>
+                            <div className="flex justify-between items-baseline mb-1.5">
+                              <span className="text-emerald-400 font-extrabold text-2xl tabular-nums">{priceYes.toFixed(0)}%</span>
+                              <span className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">tikimybė YES</span>
+                            </div>
+                            <div className="h-2 rounded-full bg-rose-500/25 overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-gradient-to-r from-emerald-600 to-emerald-400 transition-all duration-700 ease-out"
+                                style={{ width: `${priceYes}%` }}
+                              />
+                            </div>
                           </div>
-                          <div className="flex gap-2">
-                            <div className="flex-1 flex items-center justify-between p-2.5 rounded-xl bg-emerald-950/20 border border-emerald-900/50 text-emerald-400">
-                              <span className="font-semibold text-sm">YES</span>
-                              <span className="font-bold text-base">{priceYes.toFixed(0)}%</span>
-                            </div>
-                            <div className="flex-1 flex items-center justify-between p-2.5 rounded-xl bg-rose-950/20 border border-rose-900/50 text-rose-400">
-                              <span className="font-semibold text-sm">NO</span>
-                              <span className="font-bold text-base">{priceNo.toFixed(0)}%</span>
-                            </div>
+
+                          {/* Greiti statymo mygtukai */}
+                          <div className="flex gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setSelectedMarket(market); setBetOutcome('YES'); setBetMessage(null); }}
+                              className="flex-1 flex items-center justify-between px-3 py-2.5 rounded-xl bg-emerald-950/30 border border-emerald-900/50 text-emerald-400 font-bold text-sm transition-all hover:bg-emerald-600 hover:text-white hover:border-emerald-500 hover:shadow-lg hover:shadow-emerald-900/30 active:scale-95"
+                            >
+                              <span>YES</span>
+                              <span className="tabular-nums">{priceYes.toFixed(0)}%</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setSelectedMarket(market); setBetOutcome('NO'); setBetMessage(null); }}
+                              className="flex-1 flex items-center justify-between px-3 py-2.5 rounded-xl bg-rose-950/30 border border-rose-900/50 text-rose-400 font-bold text-sm transition-all hover:bg-rose-600 hover:text-white hover:border-rose-500 hover:shadow-lg hover:shadow-rose-900/30 active:scale-95"
+                            >
+                              <span>NO</span>
+                              <span className="tabular-nums">{priceNo.toFixed(0)}%</span>
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between text-[10px] text-zinc-500 pt-1 border-t border-zinc-800/60">
+                            <span className="flex items-center gap-1">
+                              <Coins className="w-3 h-3 text-emerald-500/70" />
+                              Fondas: <strong className="text-zinc-300">{pool.toFixed(0)} žet.</strong>
+                            </span>
+                            <span>{new Date(market.created_at).toLocaleDateString('lt-LT')}</span>
                           </div>
                         </div>
                       </div>
@@ -1765,24 +1805,30 @@ export default function Dashboard() {
                         <button
                           type="button"
                           onClick={() => setBetOutcome('YES')}
-                          className={`flex-1 py-2 text-center rounded-lg text-sm font-bold transition-all ${
-                            betOutcome === 'YES' 
-                              ? 'bg-emerald-600 text-white shadow-md' 
-                              : 'text-zinc-400 hover:text-white'
+                          className={`flex-1 py-2.5 flex flex-col items-center rounded-lg text-sm font-bold transition-all ${
+                            betOutcome === 'YES'
+                              ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/30 scale-[1.02]'
+                              : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
                           }`}
                         >
-                          YES
+                          <span>YES</span>
+                          <span className={`text-[10px] tabular-nums ${betOutcome === 'YES' ? 'text-emerald-100' : 'text-zinc-500'}`}>
+                            {AMM.getSpotPrice(selectedMarket.yes_reserves, selectedMarket.no_reserves, 'YES').toFixed(0)}%
+                          </span>
                         </button>
                         <button
                           type="button"
                           onClick={() => setBetOutcome('NO')}
-                          className={`flex-1 py-2 text-center rounded-lg text-sm font-bold transition-all ${
-                            betOutcome === 'NO' 
-                              ? 'bg-rose-600 text-white shadow-md' 
-                              : 'text-zinc-400 hover:text-white'
+                          className={`flex-1 py-2.5 flex flex-col items-center rounded-lg text-sm font-bold transition-all ${
+                            betOutcome === 'NO'
+                              ? 'bg-rose-600 text-white shadow-lg shadow-rose-900/30 scale-[1.02]'
+                              : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
                           }`}
                         >
-                          NO
+                          <span>NO</span>
+                          <span className={`text-[10px] tabular-nums ${betOutcome === 'NO' ? 'text-rose-100' : 'text-zinc-500'}`}>
+                            {AMM.getSpotPrice(selectedMarket.yes_reserves, selectedMarket.no_reserves, 'NO').toFixed(0)}%
+                          </span>
                         </button>
                       </div>
                     </div>
@@ -1812,11 +1858,22 @@ export default function Dashboard() {
                               key={val}
                               type="button"
                               onClick={() => setBetAmount(val)}
-                              className="text-[10px] font-bold bg-zinc-850 hover:bg-zinc-800 text-zinc-300 px-2.5 py-1 rounded-md"
+                              className={`text-[10px] font-bold px-2.5 py-1.5 rounded-md border transition-all active:scale-90 ${
+                                betAmount === val
+                                  ? 'bg-emerald-600 text-white border-emerald-500'
+                                  : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-800 hover:border-zinc-600'
+                              }`}
                             >
                               {val}
                             </button>
                           ))}
+                          <button
+                            type="button"
+                            onClick={() => setBetAmount(Math.floor(currentUser.token_balance).toString())}
+                            className="text-[10px] font-bold bg-zinc-900 hover:bg-emerald-950 text-emerald-400 px-2.5 py-1.5 rounded-md border border-emerald-900/50 hover:border-emerald-700 transition-all active:scale-90"
+                          >
+                            MAX
+                          </button>
                         </div>
                       )}
                     </div>
@@ -1862,13 +1919,13 @@ export default function Dashboard() {
                       type="button"
                       onClick={handlePlaceBet}
                       disabled={betLoading || !!(currentUser && (!betAmount || parseFloat(betAmount) <= 0))}
-                      className={`w-full py-3.5 rounded-xl font-bold text-sm transition-all shadow-lg flex items-center justify-center gap-2 ${
-                        !currentUser 
-                          ? 'bg-emerald-600 hover:bg-emerald-500 text-white' 
+                      className={`w-full py-3.5 rounded-xl font-bold text-sm transition-all shadow-lg flex items-center justify-center gap-2 active:scale-[0.98] hover:shadow-xl ${
+                        !currentUser
+                          ? 'bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white'
                           : betOutcome === 'YES'
-                            ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/10'
-                            : 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/10'
-                      } disabled:opacity-50`}
+                            ? 'bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white shadow-emerald-900/30'
+                            : 'bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white shadow-rose-900/30'
+                      } disabled:opacity-50 disabled:active:scale-100`}
                     >
                       {betLoading ? (
                         <>
@@ -1885,8 +1942,11 @@ export default function Dashboard() {
                   </div>
                 ) : (
                   <div className="py-12 text-center text-zinc-500 text-sm">
-                    <Sparkles className="w-8 h-8 mx-auto mb-2 text-emerald-500/40" />
-                    Pasirinkite spėjimų rinką kairėje, kad atliktumėte statymą.
+                    <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                      <Sparkles className="w-7 h-7 text-emerald-500/60" />
+                    </div>
+                    <p className="font-semibold text-zinc-400 mb-1">Pasirinkite rinką</p>
+                    <p className="text-xs leading-relaxed">Spauskite ant kortelės kairėje arba tiesiai ant YES / NO mygtuko, kad atliktumėte statymą.</p>
                   </div>
                 )}
               </div>
@@ -1897,7 +1957,7 @@ export default function Dashboard() {
 
         {/* TAB 2: PORTFOLIO & LEADERBOARD */}
         {activeTab === 'portfolio' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="anim-fade grid grid-cols-1 lg:grid-cols-3 gap-8">
             
             <div className="lg:col-span-2 space-y-6">
               <h2 className="text-xl font-bold flex items-center gap-2">
@@ -1926,7 +1986,7 @@ export default function Dashboard() {
                     const tokenPool = market.token_pool || 0;
 
                     return (
-                      <div key={pos.id} className="p-5 rounded-2xl bg-zinc-900/50 border border-zinc-800 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                      <div key={pos.id} className="anim-fade-up p-5 rounded-2xl bg-zinc-900/50 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/70 transition-all flex flex-col md:flex-row md:items-center justify-between gap-6">
                         <div className="space-y-1.5 max-w-[60%]">
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
                             type === 'YES' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
@@ -2029,45 +2089,65 @@ export default function Dashboard() {
               </h2>
 
               <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-lg">
-                <div className="p-4 bg-zinc-950 border-b border-zinc-850 flex justify-between text-xs text-zinc-400 font-bold uppercase tracking-wider">
+                <div className="p-4 bg-zinc-950 border-b border-zinc-800 flex justify-between text-xs text-zinc-400 font-bold uppercase tracking-wider">
                   <span>Darbuotojas</span>
                   <span>Bendras kapitalas</span>
                 </div>
 
                 <div className="divide-y divide-zinc-800/60">
-                  {leaderboard.map((user, idx) => {
-                    const isMe = user.id === currentUser?.id;
-                    const netWorth = getUserNetWorth(user);
-                    const isLeader = idx === 0;
+                  {(() => {
+                    const worths = leaderboard.map(u => getUserNetWorth(u));
+                    const maxWorth = Math.max(1, ...worths);
+                    return leaderboard.map((user, idx) => {
+                      const isMe = user.id === currentUser?.id;
+                      const netWorth = worths[idx];
+                      const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : null;
 
-                    return (
-                      <div key={user.id} className={`p-4 flex items-center justify-between gap-4 transition-colors ${
-                        isMe ? 'bg-emerald-500/5' : 'hover:bg-zinc-900/50'
-                      }`}>
-                        <div className="flex items-center gap-3">
-                          <span className={`w-6 text-center text-xs font-bold ${
-                            isLeader ? 'text-yellow-400 text-sm' : isMe ? 'text-emerald-400' : 'text-zinc-500'
-                          }`}>
-                            {idx + 1}.
-                          </span>
-                          <div>
-                            <span className={`text-sm font-semibold block ${isMe ? 'text-emerald-400' : 'text-zinc-200'}`}>
-                              {user.full_name} {isMe && '(Aš)'}
-                            </span>
-                            <span className="text-[10px] text-zinc-500">{user.email}</span>
+                      return (
+                        <div
+                          key={user.id}
+                          style={{ animationDelay: `${Math.min(idx, 10) * 40}ms` }}
+                          className={`anim-fade-up p-4 transition-colors ${
+                            isMe ? 'bg-emerald-500/5' : 'hover:bg-zinc-900/50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-3">
+                              <span className={`w-7 text-center font-bold shrink-0 ${
+                                medal ? 'text-base' : isMe ? 'text-emerald-400 text-xs' : 'text-zinc-500 text-xs'
+                              }`}>
+                                {medal ?? `${idx + 1}.`}
+                              </span>
+                              <div className="min-w-0">
+                                <span className={`text-sm font-semibold block truncate ${isMe ? 'text-emerald-400' : 'text-zinc-200'}`}>
+                                  {user.full_name} {isMe && '(Aš)'}
+                                </span>
+                                <span className="text-[10px] text-zinc-500 truncate block">{user.email}</span>
+                              </div>
+                            </div>
+
+                            <div className="text-right shrink-0">
+                              <span className="text-sm font-bold text-white flex items-center justify-end gap-1 tabular-nums">
+                                <Coins className="w-3.5 h-3.5 text-emerald-500" />
+                                {netWorth}
+                              </span>
+                              <span className="text-[9px] text-zinc-500 block">Balansas: {user.token_balance.toFixed(0)}</span>
+                            </div>
+                          </div>
+
+                          {/* Santykinė kapitalo juosta */}
+                          <div className="mt-2.5 h-1 rounded-full bg-zinc-800/80 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-700 ease-out ${
+                                idx === 0 ? 'bg-gradient-to-r from-yellow-500 to-amber-400' : isMe ? 'bg-emerald-500' : 'bg-zinc-600'
+                              }`}
+                              style={{ width: `${Math.max(2, (netWorth / maxWorth) * 100)}%` }}
+                            />
                           </div>
                         </div>
-
-                        <div className="text-right">
-                          <span className="text-sm font-bold text-white flex items-center justify-end gap-1">
-                            <Coins className="w-3.5 h-3.5 text-emerald-500" />
-                            {netWorth}
-                          </span>
-                          <span className="text-[9px] text-zinc-500 block">Balansas: {user.token_balance.toFixed(0)}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    });
+                  })()}
                   {leaderboard.length === 0 && (
                     <div className="p-6 text-center text-zinc-500 text-xs">Vartotojų dar nėra. Užregistruokite pirmąjį!</div>
                   )}
@@ -2080,7 +2160,7 @@ export default function Dashboard() {
 
         {/* TAB 3: SLOTAI */}
         {activeTab === 'slots' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="anim-fade grid grid-cols-1 lg:grid-cols-3 gap-8">
 
             {/* SLOT MACHINE */}
             <div className="lg:col-span-2 flex flex-col items-center gap-6">
@@ -2107,13 +2187,17 @@ export default function Dashboard() {
                   <div className="flex gap-3 justify-center">
                     {slotReels.map((sym, i) => {
                       const s = SLOT_SYMBOLS[sym] ?? SLOT_SYMBOLS['macbook'];
+                      const isWin = !!slotResult && slotResult.multiplier > 0 && !slotSpinning;
+                      const isLose = !!slotResult && slotResult.multiplier === 0 && !slotSpinning;
                       return (
                         <div
                           key={i}
+                          style={isWin ? { animationDelay: `${i * 120}ms` } : undefined}
                           className={`flex-1 aspect-square rounded-2xl border-2 overflow-hidden
                             transition-all duration-100 shadow-inner
                             ${slotSpinning ? 'scale-95 opacity-70 blur-[1px]' : 'scale-100 opacity-100 blur-0'}
-                            ${slotResult && slotResult.multiplier > 0 && !slotSpinning ? 'ring-2 ring-emerald-400/70 shadow-emerald-500/20 shadow-lg' : ''}
+                            ${isWin ? 'anim-slot-win anim-glow ring-2 ring-emerald-400/70' : ''}
+                            ${isLose ? 'anim-slot-lose' : ''}
                             ${s.bg}`}
                         >
                           <img
@@ -2130,7 +2214,7 @@ export default function Dashboard() {
                   {/* RESULT MESSAGE */}
                   <div className="h-10 flex items-center justify-center">
                     {slotResult && !slotSpinning && (
-                      <div className={`text-sm font-bold px-4 py-2 rounded-xl ${
+                      <div className={`anim-pop text-sm font-bold px-4 py-2 rounded-xl ${
                         slotResult.net > 0
                           ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                           : slotResult.multiplier > 0
@@ -2176,8 +2260,9 @@ export default function Dashboard() {
                     type="button"
                     onClick={handleSpin}
                     disabled={!currentUser || slotSpinning || (!!currentUser && currentUser.token_balance < slotBetAmount)}
-                    className="w-full py-4 rounded-2xl font-extrabold text-lg transition-all shadow-lg
+                    className="btn-shimmer w-full py-4 rounded-2xl font-extrabold text-lg transition-all shadow-lg
                       bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400
+                      hover:shadow-emerald-900/40 hover:shadow-xl
                       text-white disabled:opacity-40 disabled:cursor-not-allowed
                       active:scale-95"
                   >
@@ -2188,7 +2273,7 @@ export default function Dashboard() {
                   {currentUser && (
                     <div className="flex justify-between text-xs text-zinc-500 px-1">
                       <span>Balansas:</span>
-                      <span className="font-bold text-emerald-400">{currentUser.token_balance.toFixed(0)} žetonų</span>
+                      <span className="font-bold text-emerald-400"><AnimatedNumber value={currentUser.token_balance} /> žetonų</span>
                     </div>
                   )}
 
@@ -2290,7 +2375,7 @@ export default function Dashboard() {
 
         {/* TAB 4: ADMIN PANEL */}
         {activeTab === 'admin' && currentUser?.is_admin && (
-          <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
+          <div className="anim-fade grid grid-cols-1 lg:grid-cols-5 gap-8">
 
             {/* LEFT: MARKET LIST + CATEGORY LIST */}
             <div className="lg:col-span-3 space-y-8">
@@ -2752,11 +2837,11 @@ export default function Dashboard() {
 
       {/* AUTH MODAL */}
       {isAuthModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-md p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl relative">
+        <div className="anim-fade fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="anim-pop w-full max-w-md p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl relative">
             <button
               onClick={() => setIsAuthModalOpen(false)}
-              className="absolute right-4 top-4 p-1 hover:bg-zinc-855 rounded-lg text-zinc-400 hover:text-white"
+              className="absolute right-4 top-4 p-1 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white"
             >
               <XCircle className="w-5 h-5" />
             </button>
@@ -2834,7 +2919,7 @@ export default function Dashboard() {
               onClick={handleGoogleLogin}
               type="button"
               disabled={authLoading}
-              className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-750 border border-zinc-700 text-white rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-2 hover:bg-zinc-800/80 disabled:opacity-50"
+              className="w-full py-2.5 bg-zinc-800 border border-zinc-700 text-white rounded-xl text-sm font-bold transition-colors flex items-center justify-center gap-2 hover:bg-zinc-800/80 disabled:opacity-50"
             >
               <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                 <path
@@ -2886,8 +2971,8 @@ export default function Dashboard() {
 
       {/* EDIT CATEGORY MODAL */}
       {isEditCategoryModalOpen && editingCategory && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-md p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl relative animate-in fade-in zoom-in-95 duration-150">
+        <div className="anim-fade fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-md p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl relative anim-pop">
             <button
               onClick={() => {
                 setIsEditCategoryModalOpen(false);
@@ -2978,8 +3063,8 @@ export default function Dashboard() {
 
       {/* EDIT MARKET MODAL */}
       {isEditMarketModalOpen && editingMarket && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-md p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl relative animate-in fade-in zoom-in-95 duration-150">
+        <div className="anim-fade fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-md p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl relative anim-pop">
             <button
               onClick={() => {
                 setIsEditMarketModalOpen(false);
@@ -3062,7 +3147,7 @@ export default function Dashboard() {
         {toasts.map(toast => (
           <div
             key={toast.id}
-            className={`p-4 rounded-xl border shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5 fade-in duration-200 ${
+            className={`anim-toast p-4 rounded-xl border shadow-2xl flex items-center gap-3 backdrop-blur-md ${
               toast.type === 'success' 
                 ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/30' 
                 : toast.type === 'error'
