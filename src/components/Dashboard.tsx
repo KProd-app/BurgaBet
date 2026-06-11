@@ -118,7 +118,7 @@ interface Market {
   yes_reserves: number;
   no_reserves: number;
   token_pool: number;
-  status: 'active' | 'resolved' | 'cancelled';
+  status: 'active' | 'resolved' | 'cancelled' | 'pending';
   outcome: 'YES' | 'NO' | null;
   category_id: string | null;
   created_at: string;
@@ -236,6 +236,14 @@ export default function Dashboard() {
   const [editMarketCategoryId, setEditMarketCategoryId] = useState<string>('none');
   const [isEditMarketModalOpen, setIsEditMarketModalOpen] = useState<boolean>(false);
   const [editMarketMessage, setEditMarketMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+
+  // Vartotojų siūlomos rinkos
+  const [isSuggestModalOpen, setIsSuggestModalOpen] = useState<boolean>(false);
+  const [suggestQuestion, setSuggestQuestion] = useState<string>('');
+  const [suggestDescription, setSuggestDescription] = useState<string>('');
+  const [suggestCategoryId, setSuggestCategoryId] = useState<string>('none');
+  const [suggestLoading, setSuggestLoading] = useState<boolean>(false);
+  const [suggestMessage, setSuggestMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
   // Slotai
   const [slotBetAmount, setSlotBetAmount] = useState<number>(10);
@@ -1230,6 +1238,122 @@ export default function Dashboard() {
     }
   };
 
+  // Vartotojo siūloma rinka (laukia admin patvirtinimo)
+  const handleSuggestMarket = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    if (!suggestQuestion.trim()) {
+      setSuggestMessage({ type: 'error', text: 'Klausimas negali būti tuščias.' });
+      return;
+    }
+
+    setSuggestLoading(true);
+    setSuggestMessage(null);
+    const categoryId = suggestCategoryId === 'none' ? null : suggestCategoryId;
+
+    if (isDemoMode) {
+      const localMarkets: Market[] = JSON.parse(localStorage.getItem('bb_markets') || '[]');
+      const newMarket: Market = {
+        id: 'm_' + Date.now(),
+        question: suggestQuestion.trim(),
+        description: suggestDescription || null,
+        yes_reserves: 100,
+        no_reserves: 100,
+        token_pool: 0,
+        status: 'pending',
+        outcome: null,
+        category_id: categoryId,
+        created_at: new Date().toISOString(),
+        resolved_at: null,
+        creator_id: currentUser.id
+      };
+
+      localMarkets.unshift(newMarket);
+      localStorage.setItem('bb_markets', JSON.stringify(localMarkets));
+      setMarkets(localMarkets);
+
+      setSuggestQuestion('');
+      setSuggestDescription('');
+      setSuggestCategoryId('none');
+      setIsSuggestModalOpen(false);
+      showToast('success', 'Pasiūlymas pateiktas! Administratorius jį peržiūrės.');
+    } else {
+      try {
+        const { error } = await supabase.from('markets').insert({
+          question: suggestQuestion.trim(),
+          description: suggestDescription || null,
+          category_id: categoryId,
+          creator_id: currentUser.id,
+          status: 'pending'
+        });
+
+        if (error) throw error;
+
+        setSuggestQuestion('');
+        setSuggestDescription('');
+        setSuggestCategoryId('none');
+        setIsSuggestModalOpen(false);
+        showToast('success', 'Pasiūlymas pateiktas! Administratorius jį peržiūrės.');
+        await loadMarketsAndLeaderboard(false, currentUser?.id || null);
+      } catch (err: any) {
+        setSuggestMessage({ type: 'error', text: err.message || 'Klaida pateikiant pasiūlymą.' });
+      }
+    }
+    setSuggestLoading(false);
+  };
+
+  // Admin: patvirtinti pasiūlytą rinką
+  const handleApproveMarket = async (marketId: string) => {
+    if (isDemoMode) {
+      const localMarkets: Market[] = JSON.parse(localStorage.getItem('bb_markets') || '[]');
+      const idx = localMarkets.findIndex(m => m.id === marketId);
+      if (idx !== -1) {
+        localMarkets[idx].status = 'active';
+        localStorage.setItem('bb_markets', JSON.stringify(localMarkets));
+        setMarkets(localMarkets);
+        showToast('success', 'Pasiūlymas patvirtintas — rinka aktyvuota!');
+      }
+    } else {
+      try {
+        const { error } = await supabase
+          .from('markets')
+          .update({ status: 'active' })
+          .eq('id', marketId);
+
+        if (error) throw error;
+
+        showToast('success', 'Pasiūlymas patvirtintas — rinka aktyvuota!');
+        await loadMarketsAndLeaderboard(false, currentUser?.id || null);
+      } catch (err: any) {
+        showToast('error', err.message || 'Klaida tvirtinant pasiūlymą.');
+      }
+    }
+  };
+
+  // Admin: atmesti pasiūlytą rinką
+  const handleRejectMarket = async (marketId: string) => {
+    if (!confirm('Ar tikrai norite atmesti šį pasiūlymą? Jis bus ištrintas.')) return;
+
+    if (isDemoMode) {
+      const localMarkets: Market[] = JSON.parse(localStorage.getItem('bb_markets') || '[]').filter((m: Market) => m.id !== marketId);
+      localStorage.setItem('bb_markets', JSON.stringify(localMarkets));
+      setMarkets(localMarkets);
+      showToast('info', 'Pasiūlymas atmestas.');
+    } else {
+      try {
+        const { error } = await supabase.from('markets').delete().eq('id', marketId);
+        if (error) throw error;
+        showToast('info', 'Pasiūlymas atmestas.');
+        await loadMarketsAndLeaderboard(false, currentUser?.id || null);
+      } catch (err: any) {
+        showToast('error', err.message || 'Klaida atmetant pasiūlymą.');
+      }
+    }
+  };
+
   // Rinkos išsprendimas
   const handleResolveMarket = async (marketId: string, winningOutcome: 'YES' | 'NO') => {
     if (!confirm(`Ar tikrai norite uždaryti šią rinką su rezultatu ${winningOutcome}? Šis veiksmas išdalins žetonus laimėtojams.`)) {
@@ -1497,30 +1621,18 @@ export default function Dashboard() {
         )}
       </header>
 
-      {/* BENDRAS PRANEŠIMAS APIE REŽIMĄ */}
+      {/* DEMO REŽIMO PRANEŠIMAS (rodomas tik be Supabase) */}
+      {isDemoMode && (
       <div className="mt-4 flex items-center justify-between p-3.5 rounded-xl bg-zinc-900/40 border border-zinc-800 text-xs">
         <div className="flex items-center gap-2">
-          {isDemoMode ? (
-            <>
-              <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-              </span>
-              <span className="text-amber-400 font-medium">Demo Režimas (Nėra Supabase kintamųjų)</span>
-              <span className="text-zinc-500 hidden sm:inline">| Duomenys saugomi naršyklės LocalStorage. Galite laisvai testuoti sistemą.</span>
-            </>
-          ) : (
-            <>
-              <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              <span className="text-emerald-400 font-medium">Supabase Prijungtas</span>
-              <span className="text-zinc-500 hidden sm:inline">| Realaus laiko režimas su Postgres duomenų baze ir RLS apsauga.</span>
-            </>
-          )}
+          <span className="flex h-2 w-2 relative">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+          </span>
+          <span className="text-amber-400 font-medium">Demo Režimas (Nėra Supabase kintamųjų)</span>
+          <span className="text-zinc-500 hidden sm:inline">| Duomenys saugomi naršyklės LocalStorage. Galite laisvai testuoti sistemą.</span>
         </div>
-        {isDemoMode && currentUser && (
+        {currentUser && (
           <button 
             onClick={() => {
               if (currentUser) {
@@ -1540,6 +1652,7 @@ export default function Dashboard() {
           </button>
         )}
       </div>
+      )}
 
       {/* NAVIGATION TABS */}
       <nav className="flex gap-1.5 mt-6 p-1.5 bg-zinc-900/60 border border-zinc-800 rounded-2xl w-fit max-w-full overflow-x-auto scrollbar-thin backdrop-blur-md">
@@ -1625,12 +1738,26 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                Aktyvios spėjimų rinkos
-                <span className="text-xs bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full font-normal">
-                  {filteredMarkets.filter(m => m.status === 'active').length} gyvos
-                </span>
-              </h2>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  Aktyvios spėjimų rinkos
+                  <span className="text-xs bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full font-normal">
+                    {filteredMarkets.filter(m => m.status === 'active').length} gyvos
+                  </span>
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!currentUser) { setIsAuthModalOpen(true); return; }
+                    setSuggestMessage(null);
+                    setIsSuggestModalOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-zinc-900 hover:bg-emerald-950/60 border border-zinc-700 hover:border-emerald-600/60 text-zinc-200 hover:text-emerald-300 text-xs font-bold rounded-xl transition-all active:scale-95"
+                >
+                  <PlusCircle className="w-4 h-4 text-emerald-500" />
+                  Pasiūlyti spėjimą
+                </button>
+              </div>
               
               {filteredMarkets.filter(m => m.status === 'active').length === 0 ? (
                 <div className="anim-fade-up p-12 text-center rounded-2xl bg-zinc-900/30 border-2 border-dashed border-zinc-800 text-zinc-500">
@@ -1742,6 +1869,45 @@ export default function Dashboard() {
                 </div>
               )}
 
+              {/* PENDING SUGGESTIONS */}
+              {filteredMarkets.filter(m => m.status === 'pending').length > 0 && (
+                <div className="pt-6">
+                  <h3 className="text-lg font-bold text-zinc-400 mb-4 flex items-center gap-2">
+                    Pasiūlyti spėjimai
+                    <span className="text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded-full">
+                      laukia patvirtinimo
+                    </span>
+                  </h3>
+                  <div className="space-y-3">
+                    {filteredMarkets.filter(m => m.status === 'pending').map(market => {
+                      const marketCat = categories.find(c => c.id === market.category_id);
+                      const suggester = leaderboard.find(u => u.id === market.creator_id);
+                      const isMine = market.creator_id === currentUser?.id;
+                      return (
+                        <div key={market.id} className="anim-fade-up p-4 rounded-xl bg-amber-950/10 border border-amber-900/30 text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h4 className="font-semibold text-zinc-200 leading-snug">{market.question}</h4>
+                              {marketCat && (
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${getCategoryColorClasses(marketCat.color)}`}>
+                                  {marketCat.name}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-zinc-500">
+                              Pasiūlė: {isMine ? 'Jūs' : (suggester?.full_name || 'Vartotojas')} · {new Date(market.created_at).toLocaleDateString('lt-LT')}
+                            </p>
+                          </div>
+                          <span className="shrink-0 text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-lg">
+                            ⏳ Peržiūrima
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* RESOLVED MARKETS SECTION */}
               <div className="pt-6">
                 <h3 className="text-lg font-bold text-zinc-400 mb-4">Uždarytos / Išspręstos rinkos</h3>
@@ -1784,9 +1950,35 @@ export default function Dashboard() {
 
             </div>
 
-            {/* QUICK BET AREA */}
-            <div className="lg:col-span-1">
-              <div className="sticky top-6 p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-xl">
+            {/* QUICK BET AREA — šoninė juosta desktop'e, bottom-sheet mobiliame */}
+            {selectedMarket && (
+              <div
+                className="lg:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm anim-fade"
+                onClick={() => { setSelectedMarket(null); setBetMessage(null); }}
+              />
+            )}
+            <div className={
+              selectedMarket
+                ? 'fixed inset-x-0 bottom-0 z-50 lg:static lg:z-auto lg:col-span-1'
+                : 'hidden lg:block lg:col-span-1'
+            }>
+              <div className={`lg:sticky lg:top-6 p-6 bg-zinc-900 border border-zinc-800 shadow-xl ${
+                selectedMarket
+                  ? 'anim-sheet rounded-t-3xl lg:rounded-2xl max-h-[88vh] lg:max-h-none overflow-y-auto border-t-zinc-700'
+                  : 'rounded-2xl'
+              }`}>
+                {selectedMarket && (
+                  <div className="lg:hidden relative mb-3">
+                    <div className="w-12 h-1.5 rounded-full bg-zinc-700 mx-auto" />
+                    <button
+                      type="button"
+                      onClick={() => { setSelectedMarket(null); setBetMessage(null); }}
+                      className="absolute right-0 -top-1.5 p-1.5 text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors"
+                    >
+                      <XCircle className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
                 <h2 className="text-xl font-bold flex items-center gap-2 border-b border-zinc-800 pb-4 mb-4 text-white">
                   <Coins className="w-5 h-5 text-emerald-500" />
                   Statymo skaičiuoklė
@@ -2380,6 +2572,82 @@ export default function Dashboard() {
             {/* LEFT: MARKET LIST + CATEGORY LIST */}
             <div className="lg:col-span-3 space-y-8">
 
+              {/* PENDING SUGGESTIONS (ADMIN) */}
+              {markets.filter(m => m.status === 'pending').length > 0 && (
+                <div className="space-y-3">
+                  <h2 className="text-xl font-bold flex items-center gap-2 text-white">
+                    <Info className="w-5 h-5 text-amber-500" />
+                    Vartotojų pasiūlymai
+                    <span className="text-xs font-normal text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">
+                      {markets.filter(m => m.status === 'pending').length} laukia
+                    </span>
+                  </h2>
+
+                  {markets.filter(m => m.status === 'pending').map(market => {
+                    const marketCat = categories.find(c => c.id === market.category_id);
+                    const suggester = leaderboard.find(u => u.id === market.creator_id);
+                    return (
+                      <div key={market.id} className="anim-fade-up p-5 rounded-2xl bg-amber-950/10 border border-amber-900/40 space-y-3">
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                              PASIŪLYMAS
+                            </span>
+                            {marketCat && (
+                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${getCategoryColorClasses(marketCat.color)}`}>
+                                {marketCat.name}
+                              </span>
+                            )}
+                          </div>
+                          <h3 className="font-bold text-white text-sm leading-snug">{market.question}</h3>
+                          {market.description && (
+                            <p className="text-[11px] text-zinc-500 leading-relaxed">{market.description}</p>
+                          )}
+                          <p className="text-[10px] text-zinc-500">
+                            Pasiūlė: <strong className="text-zinc-400">{suggester?.full_name || suggester?.email || 'Vartotojas'}</strong>
+                            {' · '}{new Date(market.created_at).toLocaleDateString('lt-LT')}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-2 border-t border-amber-900/30">
+                          <span className="text-xs text-zinc-500 font-semibold mr-auto">Rinka startuos 50/50:</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingMarket(market);
+                              setEditMarketQuestion(market.question);
+                              setEditMarketDescription(market.description || '');
+                              setEditMarketCategoryId(market.category_id || 'none');
+                              setIsEditMarketModalOpen(true);
+                            }}
+                            className="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white rounded-lg transition-colors border border-zinc-700"
+                            title="Redaguoti prieš tvirtinant"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleApproveMarket(market.id)}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-lg shadow-emerald-900/20 active:scale-95"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Patvirtinti
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRejectMarket(market.id)}
+                            className="px-4 py-2 bg-zinc-800 hover:bg-rose-950 text-zinc-300 hover:text-rose-400 border border-zinc-700 hover:border-rose-900 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 active:scale-95"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            Atmesti
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* ACTIVE MARKETS */}
               <div className="space-y-3">
                 <h2 className="text-xl font-bold flex items-center gap-2 text-white">
@@ -2834,6 +3102,108 @@ export default function Dashboard() {
         )}
 
       </main>
+
+      {/* SUGGEST MARKET MODAL */}
+      {isSuggestModalOpen && (
+        <div className="anim-fade fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="anim-pop w-full max-w-md p-6 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => { setIsSuggestModalOpen(false); setSuggestMessage(null); }}
+              className="absolute right-4 top-4 p-1 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors"
+            >
+              <XCircle className="w-5 h-5" />
+            </button>
+
+            <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+              <PlusCircle className="w-5 h-5 text-emerald-500" />
+              Pasiūlyti spėjimą
+            </h3>
+            <p className="text-xs text-zinc-400 mb-6">
+              Pateikite savo spėjimo idėją. Administratoriui patvirtinus, rinka taps aktyvi ir visi galės statyti.
+            </p>
+
+            <form onSubmit={handleSuggestMarket} className="space-y-4">
+              <div>
+                <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Spėjimo klausimas *</label>
+                <input
+                  type="text"
+                  required
+                  value={suggestQuestion}
+                  onChange={(e) => setSuggestQuestion(e.target.value)}
+                  placeholder="Pvz.: Ar šį mėnesį pasieksime pardavimų tikslą?"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-zinc-400 font-semibold block mb-1.5">Aprašymas / kaip nuspręsti laimėtoją</label>
+                <textarea
+                  value={suggestDescription}
+                  onChange={(e) => setSuggestDescription(e.target.value)}
+                  placeholder="Kada ir pagal ką rinka turėtų būti išspręsta?"
+                  rows={3}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2 px-3 text-sm text-white focus:outline-none focus:border-emerald-500 transition-colors resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-zinc-400 font-semibold block mb-2">Kategorija</label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSuggestCategoryId('none')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
+                      suggestCategoryId === 'none'
+                        ? 'bg-zinc-600 text-white border-zinc-500'
+                        : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:border-zinc-600'
+                    }`}
+                  >
+                    Be kategorijos
+                  </button>
+                  {categories.map((cat) => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setSuggestCategoryId(cat.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                        suggestCategoryId === cat.id
+                          ? getCategoryButtonActiveClasses(cat.color)
+                          : getCategoryColorClasses(cat.color) + ' hover:opacity-80'
+                      }`}
+                    >
+                      {cat.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {suggestMessage && (
+                <div className={`p-2.5 rounded-xl text-xs flex gap-2 ${
+                  suggestMessage.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                }`}>
+                  {suggestMessage.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <XCircle className="w-4 h-4 shrink-0" />}
+                  <span>{suggestMessage.text}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={suggestLoading}
+                className="w-full py-3 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 disabled:opacity-50 text-white rounded-xl font-bold text-sm transition-all shadow-lg active:scale-[0.98] flex items-center justify-center gap-2"
+              >
+                {suggestLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Siunčiama...
+                  </>
+                ) : (
+                  'Pateikti pasiūlymą'
+                )}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* AUTH MODAL */}
       {isAuthModalOpen && (

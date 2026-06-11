@@ -49,7 +49,7 @@ create table public.markets (
     yes_reserves numeric not null default 100.0 check (yes_reserves > 0),
     no_reserves numeric not null default 100.0 check (no_reserves > 0),
     token_pool numeric not null default 0.0 check (token_pool >= 0),
-    status text not null default 'active' check (status in ('active', 'resolved', 'cancelled')),
+    status text not null default 'active' check (status in ('active', 'resolved', 'cancelled', 'pending')),
     outcome text check (outcome in ('YES', 'NO', null)),
     category_id uuid references public.categories(id) on delete set null,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null,
@@ -164,9 +164,15 @@ create policy "Visi prisijungę gali matyti rinkas" on public.markets
 create policy "Tik adminai gali valdyti rinkas" on public.markets
     for all using (
         exists (
-            select 1 from public.profiles 
+            select 1 from public.profiles
             where profiles.id = auth.uid() and profiles.is_admin = true
         )
+    );
+
+-- Vartotojai gali siūlyti rinkas (statusas privalo būti 'pending', kūrėjas — jie patys)
+create policy "Vartotojai gali siūlyti rinkas" on public.markets
+    for insert with check (
+        auth.uid() = creator_id and status = 'pending'
     );
 
 -- Pozicijos: visi mato pozicijas (dėl skaidrumo), bet tiesiogiai rašyti negali

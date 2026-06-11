@@ -95,6 +95,16 @@ body {
   50%      { box-shadow: 0 0 34px rgba(16, 185, 129, 0.5); }
 }
 
+@keyframes sheetUp {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+.anim-sheet { animation: sheetUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) both; }
+@media (min-width: 1024px) {
+  .anim-sheet { animation: none; }
+}
+
 .anim-fade-up  { animation: fadeInUp 0.45s cubic-bezier(0.16, 1, 0.3, 1) both; }
 .anim-fade     { animation: fadeIn 0.2s ease-out both; }
 .anim-pop      { animation: popIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both; }
